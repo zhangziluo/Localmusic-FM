@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>¼«¼òFM</title>
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- LED ×´Ì¬Ìõ -->
+  <div id="led">¼«¼òFM ¡¤ ¾ÍÐ÷</div>
+
+  <!-- Êý¾Ý¿¨Æ¬£¨ºÚµ×³È×Ö / LED»Òµ×ºÚ×Ö£© -->
+  <div id="dashboard" class="theme-dark">
+    <div class="dash-time" id="dash-time">00:00:00</div>
+    <div class="dash-info">
+      <span class="dash-channel">ÆµµÀ£º<b id="dash-ch">1 Ëæ»ú</b></span>
+      <span class="dash-duration">Ê±³¤£º<b id="dash-dur">00:00:00</b></span>
+    </div>
+  </div>
+
+  <!-- ÇúÄ¿ÐÅÏ¢ -->
+  <div class="track-info">
+    <div class="track-title" id="track-title">Î´²¥·Å</div>
+    <div class="track-sub" id="track-sub">¡ª</div>
+  </div>
+
+  <!-- ½ø¶ÈÌõ -->
+  <div class="progress-wrap">
+    <div class="progress-bar" id="progress-bar"></div>
+  </div>
+
+  <!-- ¿ØÖÆÀ¸ -->
+  <div class="controls">
+    <button class="icon-btn" id="btn-import" title="µ¼ÈëÎÄ¼þ¼Ð£¨¸²¸Ç£©">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        <line x1="12" y1="11" x2="12" y2="17"/>
+        <polyline points="9 14 12 11 15 14"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-append" title="×·¼ÓÎÄ¼þ¼Ð">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        <line x1="12" y1="9" x2="12" y2="17"/>
+        <polyline points="9 13 12 10 15 13"/>
+        <line x1="9" y1="17" x2="15" y2="17"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-prev" title="ÉÏÒ»Ê×">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+        <polygon points="19 20 9 12 19 4 19 20"/>
+        <rect x="5" y="4" width="2" height="16" rx="1"/>
+      </svg>
+    </button>
+    <button class="icon-btn play-btn" id="btn-play" title="²¥·Å/ÔÝÍ£">
+      <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor" id="icon-play">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-next" title="ÏÂÒ»Ê×">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+        <polygon points="5 4 15 12 5 20 5 4"/>
+        <rect x="17" y="4" width="2" height="16" rx="1"/>
+      </svg>
+    </button>
+    <button class="icon-btn heart" id="btn-heart" title="ÊÕ²Ø">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-settings" title="ÉèÖÃ">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ÆµµÀ¼üÅÌ -->
+  <div class="keypad">
+    <button class="key active" data-ch="1">1<small>Ëæ»ú</small></button>
+    <button class="key" data-ch="2">2<small>ºìÐÄ</small></button>
+    <button class="key locked" data-ch="3">3<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="4">4<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="5">5<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="6">6<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="7">7<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="8">8<small>Ðè100Ê×</small></button>
+    <button class="key locked" data-ch="9">9<small>Ðè100Ê×</small></button>
+  </div>
+
+  <!-- Òþ²ØÊäÈë -->
+  <input type="file" id="folder-input" webkitdirectory multiple style="display:none;">
+
+  <!-- Toast -->
+  <div id="toast" style="display:none;"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

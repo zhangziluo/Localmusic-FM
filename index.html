@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>极简FM</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png" type="image/png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- LED 状态条 -->
+  <div id="led">极简FM · 就绪</div>
+
+  <!-- 数据卡片（黑底橙字 / LED灰底黑字） -->
+  <div id="dashboard" class="theme-dark">
+    <div class="dash-time" id="dash-time">00:00:00</div>
+    <div class="dash-info">
+      <span class="dash-channel">频道：<b id="dash-ch">1 随机</b></span>
+      <span class="dash-duration">时长：<b id="dash-dur">00:00:00</b></span>
+    </div>
+  </div>
+
+  <!-- 曲目信息 -->
+  <div class="track-info">
+    <div class="track-title" id="track-title">未播放</div>
+    <div class="track-sub" id="track-sub">—</div>
+  </div>
+
+  <!-- 进度条 -->
+  <div class="progress-wrap">
+    <div class="progress-bar" id="progress-bar"></div>
+  </div>
+
+  <!-- 控制栏 -->
+  <div class="controls">
+    <button class="icon-btn" id="btn-import" title="导入文件夹（覆盖）">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        <line x1="12" y1="11" x2="12" y2="17"/>
+        <polyline points="9 14 12 11 15 14"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-append" title="追加文件夹">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+        <line x1="12" y1="9" x2="12" y2="17"/>
+        <polyline points="9 13 12 10 15 13"/>
+        <line x1="9" y1="17" x2="15" y2="17"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-prev" title="上一首">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+        <polygon points="19 20 9 12 19 4 19 20"/>
+        <rect x="5" y="4" width="2" height="16" rx="1"/>
+      </svg>
+    </button>
+    <button class="icon-btn play-btn" id="btn-play" title="播放/暂停">
+      <svg viewBox="0 0 24 24" width="32" height="32" fill="currentColor" id="icon-play">
+        <polygon points="5 3 19 12 5 21 5 3"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-next" title="下一首">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+        <polygon points="5 4 15 12 5 20 5 4"/>
+        <rect x="17" y="4" width="2" height="16" rx="1"/>
+      </svg>
+    </button>
+    <button class="icon-btn heart" id="btn-heart" title="收藏">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+      </svg>
+    </button>
+    <button class="icon-btn" id="btn-settings" title="设置">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- 频道键盘 -->
+  <div class="keypad">
+    <button class="key active" data-ch="1">1<small>随机</small></button>
+    <button class="key" data-ch="2">2<small>红心</small></button>
+    <button class="key locked" data-ch="3">3<small>需100首</small></button>
+    <button class="key locked" data-ch="4">4<small>需100首</small></button>
+    <button class="key locked" data-ch="5">5<small>需100首</small></button>
+    <button class="key locked" data-ch="6">6<small>需100首</small></button>
+    <button class="key locked" data-ch="7">7<small>需100首</small></button>
+    <button class="key locked" data-ch="8">8<small>需100首</small></button>
+    <button class="key locked" data-ch="9">9<small>需100首</small></button>
+  </div>
+
+  <!-- 隐藏输入 -->
+  <input type="file" id="folder-input" webkitdirectory multiple style="display:none;">
+
+  <!-- Toast -->
+  <div id="toast" style="display:none;"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
