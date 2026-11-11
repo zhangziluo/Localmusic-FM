@@ -18,8 +18,8 @@
   <div id="dashboard" class="theme-dark">
     <div class="dash-time" id="dash-time">00:00:00</div>
     <div class="dash-info">
-      <span class="dash-channel">频道：<b id="dash-ch">1 随机</b></span>
-      <span class="dash-duration">时长：<b id="dash-dur">00:00:00</b></span>
+      <span class="dash-channel" title="频道"><span class="dash-label">CH</span><b id="dash-ch">1</b></span>
+      <span class="dash-duration" title="累计时长"><span class="dash-label">TIME</span><b id="dash-dur">0000:00:00</b></span>
     </div>
   </div>
 
@@ -85,13 +85,16 @@
   <div class="keypad">
     <button class="key active" data-ch="1">1<small>随机</small></button>
     <button class="key" data-ch="2">2<small>红心</small></button>
-    <button class="key locked" data-ch="3">3<small>需100首</small></button>
-    <button class="key locked" data-ch="4">4<small>需100首</small></button>
-    <button class="key locked" data-ch="5">5<small>需100首</small></button>
-    <button class="key locked" data-ch="6">6<small>需100首</small></button>
-    <button class="key locked" data-ch="7">7<small>需100首</small></button>
-    <button class="key locked" data-ch="8">8<small>需100首</small></button>
-    <button class="key locked" data-ch="9">9<small>需100首</small></button>
+    <button class="key locked" data-ch="3">3<small>待解锁</small></button>
+    <button class="key locked" data-ch="4">4<small>待解锁</small></button>
+    <button class="key locked" data-ch="5">5<small>待解锁</small></button>
+    <button class="key locked" data-ch="6">6<small>待解锁</small></button>
+    <button class="key locked" data-ch="7">7<small>待解锁</small></button>
+    <button class="key locked" data-ch="8">8<small>待解锁</small></button>
+    <button class="key locked" data-ch="9">9<small>待解锁</small></button>
+    <button class="key" data-key="*" aria-label="星号键，暂未开放">*</button>
+    <button class="key" data-key="0" aria-label="0 键，暂未开放">0</button>
+    <button class="key" data-key="#" aria-label="井号键，暂未开放">#</button>
   </div>
 
   <!-- 隐藏输入 -->

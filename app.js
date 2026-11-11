@@ -25,12 +25,36 @@ function loadDirHandle() {
     req.onsuccess = () => resolve(req.result); req.onerror = reject;
   });
 }
+function saveLibraryIndex() {
+  try {
+    localStorage.setItem('fm_library', JSON.stringify(state.tracks.map(t => ({
+      name: t.name,
+      fileName: t.file ? t.file.name : (t.fileName || ''),
+      path: t.path || '',
+    }))));
+  } catch (e) { console.log('保存曲库索引失败:', e); }
+}
+function loadLibraryIndex() {
+  try {
+    const list = JSON.parse(localStorage.getItem('fm_library') || '[]');
+    return Array.isArray(list)
+      ? list.filter(t => t && typeof t.name === 'string')
+      : [];
+  } catch (e) { return []; }
+}
+
+function isFavorite(name, fileName) {
+  return state.favorites.has(fileName) || state.favorites.has(name);
+}
+
+const UNLOCK_TRACKS = 15;   // 曲库超过该数量后解锁 CH3-CH9
+const MAX_PLAY_SECONDS = 10000 * 3600; // 到 10000:00:00 即归零，最大显示 9999:59:59
 
 // ============ 状态 ============
 const state = {
   tracks: [], played: [], current: null, playing: false,
   noiseOn: false, noiseType: 'pink', noiseVolume: 0.85, voiceInterval: 0,
-  totalPlayTime: 0, playStartTime: 0,
+  totalPlayTime: 0, playStartTime: 0, rebooting: false,
   ch: 1, accent: '#ff8c42', cardStyle: 'dark',
   favorites: new Set(),
 };
@@ -49,29 +73,37 @@ const state = {
   state.cardStyle = cfg.cardStyle || 'dark';
   const favs = JSON.parse(localStorage.getItem('fm_favs') || '[]');
   state.favorites = new Set(favs);
+  refreshDuration();
 
   document.documentElement.style.setProperty('--accent', state.accent);
   const dash = $('#dashboard');
   if (dash) dash.className = `theme-${state.cardStyle}`;
 
+  // 先恢复曲库索引；音频文件需要等文件夹授权后再重新扫描
+  const savedIndex = loadLibraryIndex();
+  if (savedIndex.length) {
+    state.tracks = savedIndex.map(t => ({
+      name: t.name,
+      fileName: t.fileName || '',
+      file: null,
+      fav: isFavorite(t.name, t.fileName),
+      path: t.path || '',
+    }));
+    refreshChannels();
+    $('#led').textContent = `上次曲库 ${state.tracks.length} 首 · 正在恢复`;
+  }
+
   // 恢复文件夹
+  let savedHandle = null;
   try {
     await initDB();
-    const savedHandle = await loadDirHandle();
-    if (savedHandle) {
-      let permitted = false;
-      if (savedHandle.queryPermission) {
-        permitted = await savedHandle.queryPermission({ mode: 'read' }) === 'granted';
-        if (!permitted) permitted = await savedHandle.requestPermission({ mode: 'read' }) === 'granted';
-      }
-      if (permitted) {
-        state.tracks = []; state.played = [];
-        await scanDirectory(savedHandle);
-        $('#led').textContent = `已自动恢复 ${state.tracks.length} 首`;
-        refreshChannels();
-      }
-    }
+    savedHandle = await loadDirHandle();
   } catch (e) { console.log('恢复失败:', e); }
+  if (savedHandle) {
+    await restoreLibrary(savedHandle, false);
+  } else if (state.tracks.length) {
+    $('#led').textContent = `上次曲库 ${state.tracks.length} 首 · 请重新导入文件夹`;
+  }
   refreshDuration();
 })();
 
@@ -88,16 +120,50 @@ updateClock(); setInterval(updateClock, 1000);
 
 // ============ 时长 ============
 function fmtDuration(sec) {
-  const h = String(Math.floor(sec/3600)).padStart(2,'0');
+  const h = String(Math.floor(sec/3600)).padStart(4,'0');
   const m = String(Math.floor((sec%3600)/60)).padStart(2,'0');
   const s = String(Math.floor(sec%60)).padStart(2,'0');
   return `${h}:${m}:${s}`;
 }
-function refreshDuration() {
+
+function playTimeNow() {
   let cur = state.totalPlayTime;
   if (state.playing && state.playStartTime > 0) cur += (Date.now() - state.playStartTime)/1000;
+  return cur;
+}
+
+// 时长归零；若归零瞬间正在播放，触发一次 0.2 秒的“设备重启”
+function wrapPlayTime() {
+  if (playTimeNow() < MAX_PLAY_SECONDS) return false;
+  state.totalPlayTime = 0;
+  state.playStartTime = (state.playing && state.playStartTime > 0) ? Date.now() : 0;
+  saveConfig();
+  if (state.playing) rebootScreen();
+  return true;
+}
+
+function rebootScreen() {
+  const dash = $('#dashboard');
+  if (!dash || state.rebooting) return;
+  state.rebooting = true;
+  dash.classList.add('rebooting');
+  // 底噪瞬间中断，0.2 秒后随屏幕一起恢复
+  if (state.noiseOn && state.playing) stopNoise(0.02);
   const el = $('#dash-dur');
-  if (el) el.textContent = fmtDuration(cur);
+  if (el) el.textContent = '0000:00:00';
+  setTimeout(() => {
+    dash.classList.remove('rebooting');
+    state.rebooting = false;
+    refreshDuration();
+    if (state.noiseOn && state.playing && !noiseSrc) startNoise();
+  }, 200);
+}
+
+function refreshDuration() {
+  if (state.rebooting) return;
+  wrapPlayTime();
+  const el = $('#dash-dur');
+  if (el) el.textContent = fmtDuration(playTimeNow());
 }
 setInterval(refreshDuration, 1000);
 
@@ -269,19 +335,13 @@ audio.addEventListener('play', () => {
   if (state.noiseOn) startNoise();
 });
 audio.addEventListener('pause', () => {
-  if (state.playStartTime > 0) {
-    state.totalPlayTime += (Date.now() - state.playStartTime)/1000;
-    state.playStartTime = 0; saveConfig();
-  }
+  commitPlayTime(true);
   const icon = $('#icon-play');
   if (icon) icon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
   stopNoise();
 });
 audio.addEventListener('ended', () => {
-  if (state.playStartTime > 0) {
-    state.totalPlayTime += (Date.now() - state.playStartTime)/1000;
-    state.playStartTime = 0; saveConfig();
-  }
+  commitPlayTime(true);
   playTrack(pickNext());
 });
 audio.addEventListener('timeupdate', () => {
@@ -290,17 +350,24 @@ audio.addEventListener('timeupdate', () => {
   }
 });
 
+// 播放中每 15 秒落盘一次；页面隐藏 / 关闭时立即结算，避免刷新丢失当前播放段
+setInterval(() => { if (state.playing) commitPlayTime(false); }, 15000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') commitPlayTime(false);
+});
+window.addEventListener('pagehide', () => commitPlayTime(false));
+
 function pickNext() {
-  if (!state.tracks.length) return null;
+  const playable = state.tracks.filter(t => t.file);
+  if (!playable.length) return null;
   if (state.ch === 2) {
-    const favs = state.tracks.filter(t => t.fav);
-    if (!favs.length) return state.tracks[Math.floor(Math.random()*state.tracks.length)];
-    return favs[Math.floor(Math.random()*favs.length)];
+    const favs = playable.filter(t => t.fav);
+    if (favs.length) return favs[Math.floor(Math.random()*favs.length)];
   }
-  return state.tracks[Math.floor(Math.random() * state.tracks.length)];
+  return playable[Math.floor(Math.random() * playable.length)];
 }
 function playTrack(t) {
-  if (!t) return;
+  if (!t || !t.file) return;
   state.current = t;
   audio.src = URL.createObjectURL(t.file);
   audio.play();
@@ -318,53 +385,88 @@ function saveConfig() {
     accent: state.accent, cardStyle: state.cardStyle,
   }));
 }
+function commitPlayTime(stop = true) {
+  if (state.playStartTime > 0) {
+    const now = Date.now();
+    state.totalPlayTime += Math.max(0, (now - state.playStartTime) / 1000);
+    state.playStartTime = stop ? 0 : now;
+  }
+  saveConfig();
+}
 
 // ============ 控制 ============
+function playRandom() {
+  const t = pickNext();
+  if (t) playTrack(t);
+}
+function runWithLibrary(action) {
+  if (state.tracks.length && !state.tracks.some(t => t.file)) {
+    ensurePlayable().then(ok => { if (ok) action(); });
+  } else {
+    action();
+  }
+}
 $('#btn-play').addEventListener('click', () => {
-  if (!state.current) { const t = pickNext(); if (t) playTrack(t); return; }
+  if (!state.current) { runWithLibrary(playRandom); return; }
   if (state.playing) { audio.pause(); state.playing = false; }
   else { audio.play(); state.playing = true; }
 });
-$('#btn-next').addEventListener('click', () => { const t = pickNext(); if (t) playTrack(t); });
-$('#btn-prev').addEventListener('click', () => { const t = pickNext(); if (t) playTrack(t); });
+$('#btn-next').addEventListener('click', () => runWithLibrary(playRandom));
+$('#btn-prev').addEventListener('click', () => runWithLibrary(playRandom));
 $('#btn-heart').addEventListener('click', () => {
   if (!state.current) return;
   state.current.fav = !state.current.fav;
   $('#btn-heart').classList.toggle('active', state.current.fav);
-  if (state.current.fav) state.favorites.add(state.current.name);
-  else state.favorites.delete(state.current.name);
+  const favName = state.current.name;
+  const favFile = state.current.fileName || favName;
+  if (state.current.fav) {
+    state.favorites.add(favFile); state.favorites.add(favName);
+  } else {
+    state.favorites.delete(favFile); state.favorites.delete(favName);
+  }
   localStorage.setItem('fm_favs', JSON.stringify([...state.favorites]));
 });
 
 // ============ 导入（覆盖 + 追加） ============
 async function handleImport(append) {
-  if ('showDirectoryPicker' in window) {
-    try {
-      const handle = await window.showDirectoryPicker();
-      await saveDirHandle(handle);
-      const newTracks = [];
-      await scanDirectory(handle, newTracks);
-
-      if (!append) { state.tracks = []; state.played = []; }
-
-      const existingNames = new Set(state.tracks.map(t => t.name + t.path));
-      let added = 0;
-      for (const item of newTracks) {
-        const file = await item.getFile();
-        const entry = { name: file.name.replace(/\.[^.]+$/, ''), file, fav: state.favorites.has(file.name), path: item.path || '' };
-        if (!append || !existingNames.has(entry.name + entry.path)) {
-          state.tracks.push(entry);
-          existingNames.add(entry.name + entry.path);
-          added++;
-        }
-      }
-
-      $('#led').textContent = append ? `已追加 ${added} 首` : `已导入 ${state.tracks.length} 首`;
-      refreshChannels();
-      if (!state.current && state.tracks.length) playTrack(pickNext());
-    } catch(e) { $('#led').textContent = '已取消'; }
-  } else {
+  if (!('showDirectoryPicker' in window)) {
     $('#folder-input').click();
+    return;
+  }
+  let handle;
+  try {
+    handle = await window.showDirectoryPicker();
+  } catch (e) {
+    $('#led').textContent = '已取消';
+    return;
+  }
+  try {
+    await saveDirHandle(handle);
+    pendingDirHandle = handle;
+    const newTracks = await tracksFromHandle(handle);
+
+    // 授权失效时只恢复了索引，此时追加也按覆盖处理，避免留下无法播放的旧条目
+    if (!append || state.tracks.some(t => !t.file)) {
+      state.tracks = []; state.played = [];
+    }
+
+    const existingNames = new Set(state.tracks.map(t => t.name + t.path));
+    let added = 0;
+    for (const entry of newTracks) {
+      if (!append || !existingNames.has(entry.name + entry.path)) {
+        state.tracks.push(entry);
+        existingNames.add(entry.name + entry.path);
+        added++;
+      }
+    }
+
+    saveLibraryIndex();
+    $('#led').textContent = append ? `已追加 ${added} 首` : `已导入 ${state.tracks.length} 首`;
+    refreshChannels();
+    if (!state.current && state.tracks.length) playTrack(pickNext());
+  } catch(e) {
+    console.log('导入失败:', e);
+    $('#led').textContent = '导入失败 · 请重新选择文件夹';
   }
 }
 
@@ -376,8 +478,13 @@ $('#folder-input').addEventListener('change', e => {
     const ext = f.name.toLowerCase().split('.').pop();
     return ['mp3','flac','wav','ogg','m4a','opus','aac'].includes(ext);
   });
-  state.tracks = files.map(f => ({ name: f.name.replace(/\.[^.]+$/, ''), file: f, fav: state.favorites.has(f.name) }));
+  pendingDirHandle = null;
+  state.tracks = files.map(f => ({
+    name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, file: f,
+    fav: isFavorite(f.name.replace(/\.[^.]+$/, ''), f.name), path: f.webkitRelativePath || '',
+  }));
   state.played = [];
+  saveLibraryIndex();
   $('#led').textContent = `已导入 ${state.tracks.length} 首`;
   refreshChannels();
 });
@@ -394,26 +501,123 @@ async function scanDirectory(dir, list) {
   }
 }
 
-// ============ 频道 ============
-function refreshChannels() {
-  const ok = state.tracks.length >= 100;
-  document.querySelectorAll('.key').forEach(k => {
-    const ch = +k.dataset.ch;
-    if (ch > 2) k.classList.toggle('locked', !ok);
-  });
+async function tracksFromHandle(dir) {
+  const handles = [];
+  await scanDirectory(dir, handles);
+  const tracks = [];
+  for (const handle of handles) {
+    const file = await handle.getFile();
+    tracks.push({
+      name: file.name.replace(/\.[^.]+$/, ''),
+      fileName: file.name,
+      file,
+      fav: isFavorite(file.name.replace(/\.[^.]+$/, ''), file.name),
+      path: '',
+    });
+  }
+  return tracks;
 }
-document.querySelectorAll('.key').forEach(btn => {
+
+let pendingDirHandle = null;
+let restoringLibrary = false;
+
+async function restoreLibrary(handle, requestPermission = false) {
+  if (!handle || restoringLibrary) return false;
+  restoringLibrary = true;
+  try {
+    let perm = 'granted';
+    if (requestPermission && handle.requestPermission) {
+      perm = await handle.requestPermission({ mode: 'read' });
+    } else if (handle.queryPermission) {
+      perm = await handle.queryPermission({ mode: 'read' });
+    }
+    if (perm !== 'granted') {
+      pendingDirHandle = handle;
+      $('#led').textContent = state.tracks.length
+        ? `上次曲库 ${state.tracks.length} 首 · 点击播放恢复`
+        : '点击播放恢复上次曲库';
+      return false;
+    }
+    const tracks = await tracksFromHandle(handle);
+    state.tracks = tracks;
+    state.played = [];
+    pendingDirHandle = null;
+    saveLibraryIndex();
+    refreshChannels();
+    refreshDuration();
+    $('#led').textContent = `已自动恢复 ${tracks.length} 首`;
+    return true;
+  } catch (e) {
+    console.log('恢复失败:', e);
+    pendingDirHandle = handle;
+    $('#led').textContent = '曲库恢复失败 · 请重新导入文件夹';
+    return false;
+  } finally {
+    restoringLibrary = false;
+  }
+}
+
+async function ensurePlayable() {
+  if (state.tracks.some(t => t.file)) return true;
+  if (pendingDirHandle) {
+    const ok = await restoreLibrary(pendingDirHandle, true);
+    return ok && state.tracks.some(t => t.file);
+  }
+  if (state.tracks.length) {
+    $('#led').textContent = '曲库文件未授权 · 请重新导入文件夹';
+  }
+  return false;
+}
+
+// ============ 频道 ============
+
+function refreshChannels() {
+  const unlocked = state.tracks.length > UNLOCK_TRACKS;
+  document.querySelectorAll('.key[data-ch]').forEach(k => {
+    const ch = +k.dataset.ch;
+    if (ch <= 2) return;
+    k.classList.toggle('locked', !unlocked);
+    const tag = k.querySelector('small');
+    if (tag) tag.style.display = unlocked ? 'none' : '';
+  });
+
+  // 曲库变少导致当前频道被锁定时，退回 CH1
+  if (!unlocked && state.ch > 2) {
+    state.ch = 1;
+    state.played = [];
+    document.querySelectorAll('.key[data-ch]').forEach(b => {
+      b.classList.toggle('active', b.dataset.ch === '1');
+    });
+    const dashCh = $('#dash-ch');
+    if (dashCh) dashCh.textContent = '1';
+  }
+}
+
+function activateChannel(btn, ch) {
+  state.ch = ch; state.played = [];
+  document.querySelectorAll('.key[data-ch]').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const dashCh = $('#dash-ch');
+  if (dashCh) dashCh.textContent = String(ch);
+  $('#led').textContent = `CH${ch} · 已切换`;
+  const t = pickNext(); if (t) playTrack(t);
+}
+
+document.querySelectorAll('.key[data-ch]').forEach(btn => {
   btn.addEventListener('click', () => {
     const ch = +btn.dataset.ch;
-    if (ch > 2 && state.tracks.length < 100) { $('#led').textContent = '频道 3-9 需 ≥100 首解锁'; return; }
-    state.ch = ch; state.played = [];
-    document.querySelectorAll('.key').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    const chLabel = btn.querySelector('small') ? btn.querySelector('small').innerText : '';
-    const dashCh = $('#dash-ch');
-    if (dashCh) dashCh.textContent = `${ch} ${chLabel}`;
-    $('#led').textContent = `CH${ch} · 已切换`;
-    const t = pickNext(); if (t) playTrack(t);
+    if (ch > 2 && state.tracks.length <= UNLOCK_TRACKS) {
+      $('#led').textContent = `CH3-9 待解锁 · 需超过 ${UNLOCK_TRACKS} 首`;
+      return;
+    }
+    runWithLibrary(() => activateChannel(btn, ch));
+  });
+});
+
+// 数字键盘 * / 0 / #：暂未分配功能
+document.querySelectorAll('.key[data-key]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $('#led').textContent = `${btn.dataset.key} 键暂未开放`;
   });
 });
 
