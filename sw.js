@@ -1,5 +1,5 @@
-const CACHE='fm-pwa-v7';
-const ASSETS=['./','index.html','style.css','app.js','manifest.json','icon-192.png','icon-512.png','fonts/DSEG14Classic-Regular.woff2','fonts/DSEG14Classic-Bold.woff2'];
+const CACHE='fm-pwa-v12';
+const ASSETS=['./','index.html','style.css?v=5','app.js?v=4','manifest.json','icon-192.png','icon-512.png','fonts/DSEG14Classic-Regular.woff2','fonts/DSEG14Classic-Bold.woff2'];
 
 self.addEventListener('install',e=>e.waitUntil(
   caches.open(CACHE).then(c=>c.addAll(ASSETS))

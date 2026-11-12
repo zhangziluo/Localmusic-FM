@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#f5f5f0">
 <title>极简FM</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png" type="image/png">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=5">
 </head>
 <body>
 <div id="app">
@@ -14,12 +15,31 @@
   <!-- LED 状态条 -->
   <div id="led">极简FM · 就绪</div>
 
-  <!-- 数据卡片（黑底橙字 / LED灰底黑字） -->
-  <div id="dashboard" class="theme-dark">
-    <div class="dash-time" id="dash-time">00:00:00</div>
-    <div class="dash-info">
-      <span class="dash-channel" title="频道"><span class="dash-label">CH</span><b id="dash-ch">1</b></span>
-      <span class="dash-duration" title="累计时长"><span class="dash-label">TIME</span><b id="dash-dur">0000:00:00</b></span>
+  <!-- 数据卡片 + 左右极简竖推子 -->
+  <div class="deck">
+    <div class="fader">
+      <span class="fader-label">音乐</span>
+      <div class="fader-track">
+        <input id="music-volume" type="range" min="0" max="100" step="1" value="100" aria-label="音乐音量">
+      </div>
+      <b class="fader-val" id="music-volume-val">100</b>
+    </div>
+
+    <!-- 数据卡片（底色/字色/辉光跟随界面主题） -->
+    <div id="dashboard" class="theme-dark">
+      <div class="dash-time" id="dash-time">00:00:00</div>
+      <div class="dash-info">
+        <span class="dash-channel" title="频道"><span class="dash-label">CH</span><b id="dash-ch">1</b></span>
+        <span class="dash-duration" title="累计时长"><span class="dash-label">TIME</span><b id="dash-dur">0000:00:00</b></span>
+      </div>
+    </div>
+
+    <div class="fader">
+      <span class="fader-label">底噪</span>
+      <div class="fader-track">
+        <input id="noise-volume" type="range" min="0" max="100" step="1" value="85" aria-label="底噪音量">
+      </div>
+      <b class="fader-val" id="noise-volume-val">85</b>
     </div>
   </div>
 
@@ -104,6 +124,6 @@
   <div id="toast" style="display:none;"></div>
 </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
