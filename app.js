@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-console.log('极简FM · app.js?v=12 已加载');
+console.log('极简FM · app.js?v=13 已加载');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -231,10 +231,56 @@ const MAX_WEB_LINKS = 1000;   // 最多保存 1000 条网址
 const MAX_WEB_DIGITS = 6;     // 编号最多 6 位
 const WEB_TIMEOUT = 5000;     // 5 秒无操作自动取消
 const DEFAULT_WEB_LINKS = {
+  // 电台 / 工具
   '1': 'https://streamurl.link',
   '2': 'https://roamdial.com',
   '3': 'https://globalradio.app',
+  // 公共服务：110 / 119 / 120 等（911 / 999 / 404 无官网地址，未内置）
+  '110': 'https://zwfw.mps.gov.cn/',      // 报警
+  '114': 'https://yhssglxt.miit.gov.cn/', // 查号台
+  '119': 'https://www.mem.gov.cn/',       // 火警
+  '120': 'https://www.nhc.gov.cn/',       // 急救
+  '122': 'https://www.12123.gov.cn/',     // 交通事故
+  '163': 'https://www.163.com/',          // 网易
+  '10000': 'https://www.189.cn/',         // 中国电信
+  '10010': 'https://www.10010.com/',      // 中国联通
+  '10086': 'https://www.10086.cn/',       // 中国移动
+  '12117': 'http://www.ntsc.ac.cn/',      // 报时台
+  '12121': 'http://www.cma.gov.cn/',      // 气象服务
+  '12122': 'https://www.mot.gov.cn/',     // 高速救援
+  '12123': 'https://www.12123.gov.cn/',   // 交管 12123
+  '12306': 'https://www.12306.cn/',       // 铁路客服
+  '12315': 'https://www.12315.cn/',       // 消费者投诉
+  '12320': 'https://www.nhc.gov.cn/',     // 公共卫生
+  '12333': 'https://www.mohrss.gov.cn/',  // 人社服务
+  '12345': 'https://www.gov.cn/',         // 市民热线
+  '95598': 'https://www.95598.cn/',       // 国家电网
 };
+// 内置编号的中文名：仅当该编号仍指向内置地址时用于展示（用户改过网址就不再显示）
+const WEB_LINK_NAMES = {
+  '110': '报警',
+  '114': '查号台',
+  '119': '火警',
+  '120': '急救',
+  '122': '交通事故',
+  '163': '网易',
+  '10000': '中国电信',
+  '10010': '中国联通',
+  '10086': '中国移动',
+  '12117': '报时台',
+  '12121': '气象服务',
+  '12122': '高速救援',
+  '12123': '交管12123',
+  '12306': '铁路客服',
+  '12315': '消费者投诉',
+  '12320': '公共卫生',
+  '12333': '人社服务',
+  '12345': '市民热线',
+  '95598': '国家电网',
+};
+// 内置默认表升级标记：版本号 +1 时，老用户会一次性补全缺失的内置编号（不覆盖已保存的网址）
+const WEB_SEED_KEY = 'fm_webjumps_seed';
+const WEB_SEED_VERSION = 2;
 const web = { active: false, buf: '', timer: 0 };
 
 // 校验并规范化网页跳转编号：1–6 位数字，去掉前导 0；非法返回 null
@@ -250,23 +296,42 @@ function saveWebLinks() {
   try { localStorage.setItem(WEB_LINKS_KEY, JSON.stringify(state.webLinks)); }
   catch (e) { console.log('保存网页跳转失败:', e); }
 }
+function readWebSeed() {
+  try { return parseInt(localStorage.getItem(WEB_SEED_KEY), 10) || 0; }
+  catch (e) { return 0; }
+}
+function writeWebSeed(v) {
+  try { localStorage.setItem(WEB_SEED_KEY, String(v)); } catch (e) {}
+}
 function loadWebLinks() {
   let raw;
   try { raw = localStorage.getItem(WEB_LINKS_KEY); }
   catch (e) { console.log('读取网页跳转失败:', e); return { ...DEFAULT_WEB_LINKS }; }
-  if (raw == null) return { ...DEFAULT_WEB_LINKS };   // 首次使用：内置默认地址
   const out = {};
-  try {
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== 'object') return out;
-    for (const rawKey of Object.keys(obj)) {
+  if (raw != null) {
+    try {
+      const obj = JSON.parse(raw);
+      if (obj && typeof obj === 'object') {
+        for (const rawKey of Object.keys(obj)) {
+          if (Object.keys(out).length >= MAX_WEB_LINKS) break;
+          const key = parseWebKey(rawKey);
+          if (!key) continue;
+          const url = obj[rawKey];
+          if (typeof url === 'string' && /^https?:\/\//i.test(url)) out[key] = url;
+        }
+      }
+    } catch (e) { console.log('读取网页跳转失败:', e); }
+  }
+  // 首次使用：全量写入内置默认；老数据仅在 seed 版本升级时补全缺失编号（不覆盖用户改动）
+  if (raw == null || readWebSeed() < WEB_SEED_VERSION) {
+    for (const key of Object.keys(DEFAULT_WEB_LINKS)) {
       if (Object.keys(out).length >= MAX_WEB_LINKS) break;
-      const key = parseWebKey(rawKey);
-      if (!key) continue;
-      const url = obj[rawKey];
-      if (typeof url === 'string' && /^https?:\/\//i.test(url)) out[key] = url;
+      if (!out[key]) out[key] = DEFAULT_WEB_LINKS[key];
     }
-  } catch (e) { console.log('读取网页跳转失败:', e); }
+    writeWebSeed(WEB_SEED_VERSION);
+    try { localStorage.setItem(WEB_LINKS_KEY, JSON.stringify(out)); }
+    catch (e) { console.log('写入默认网页跳转失败:', e); }
+  }
   return out;
 }
 
@@ -1622,7 +1687,8 @@ function confirmWebJump() {
     return;
   }
   flashDashLabel(`↗${num}`);
-  $('#led').textContent = `网页跳转 · 正在打开 ${url}`;
+  const name = WEB_LINK_NAMES[num] && DEFAULT_WEB_LINKS[num] === url ? WEB_LINK_NAMES[num] : '';
+  $('#led').textContent = name ? `网页跳转 · ${name}（${url}）` : `网页跳转 · 正在打开 ${url}`;
   openWebLink(url);
 }
 
@@ -1886,15 +1952,18 @@ $('#btn-settings').addEventListener('click', () => {
 
   function renderWebLinks() {
     const keys = Object.keys(webDraft).sort((a, b) => +a - +b);
-    webListEl.innerHTML = keys.length ? keys.map(k => `
+    webListEl.innerHTML = keys.length ? keys.map(k => {
+      const name = WEB_LINK_NAMES[k] && DEFAULT_WEB_LINKS[k] === webDraft[k] ? WEB_LINK_NAMES[k] : '';
+      return `
       <div class="stream-item">
         <span class="stream-key">${k}</span>
         <span class="stream-meta">
-          <b>↗ 编号 ${k}</b>
+          <b>↗ ${k}${name ? ' ' + escapeHtml(name) : ''}</b>
           <i>${escapeHtml(webDraft[k])}</i>
         </span>
         <button type="button" class="stream-del web-del" data-key="${k}">删除</button>
-      </div>`).join('')
+      </div>`;
+    }).join('')
       : '<div class="stream-empty">还没有网页跳转，点右上角「＋ 添加」</div>';
 
     if (webCapEl) webCapEl.textContent = `${keys.length} / ${MAX_WEB_LINKS}`;

@@ -98,7 +98,8 @@ const MAX_WEB_LINKS = 1000;
 - 编号：`0`–`999999`，最多 `MAX_WEB_DIGITS = 6` 位；单独 `0` 合法，多位数会自动替换前导 0（不会产生 `01`）
 - 显示：`renderWeb()` 把 `#dash-ch` 显示为 `↗` / `↗编号`，并给 `#dashboard` 加 `.dash-link`（脉冲动画）；确认后 `flashDashLabel()` 用 `.dash-link-flash` 闪一下再 `renderDash()`
 - 取消 / 互斥：`*` 在选号态优先取消选号；`startWebJump()` 会 `cancelDial(true)`，`startDial()` 会 `cancelWebJump(true)`；播放 / 切歌键、彩蛋触发、5 秒超时也会退出
-- 持久化：`loadWebLinks()` / `saveWebLinks()` 使用 `fm_webjumps`；首次无数据时用 `DEFAULT_WEB_LINKS`（`1`→streamurl.link、`2`→roamdial.com、`3`→globalradio.app）
+- 持久化：`loadWebLinks()` / `saveWebLinks()` 使用 `fm_webjumps`；`DEFAULT_WEB_LINKS` 内置 22 条（`1`–`3` 电台站点 + 19 条公共服务），`fm_webjumps_seed` 记录已套用版本，`WEB_SEED_VERSION` 提升时只补全缺失编号
+- 展示：`WEB_LINK_NAMES` 提供内置编号中文名，设置列表 / LED 仅在网址仍为内置值时显示
 - 设置面板：`webDraft` 临时副本，点「完成」才 `state.webLinks = webDraft; saveWebLinks()`；`nextFreeWebKey()` 从 `0` 起分配空号
 
 ## 隐藏彩蛋（数字键连击）

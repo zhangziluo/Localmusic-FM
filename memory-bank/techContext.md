@@ -63,7 +63,8 @@ node --check sw.js
 | localStorage | `fm_favs` | 收藏曲名数组（兼容文件名与去扩展名曲名） |
 | localStorage | `fm_library` | 曲库索引（name / fileName / path） |
 | localStorage | `fm_streams` | 网络串流表 `{ 键: { name, url } }`，键 ∈ `3-9 0` 或编号 `10-9999`（`#` 用于选号、`*` 用于网页跳转，均不参与串流），最多 1000 条 |
-| localStorage | `fm_webjumps` | 网页跳转表 `{ 编号: url }`，编号 ∈ `0-999999`（前导 0 归一化），最多 1000 条 |
+| localStorage | `fm_webjumps` | 网页跳转表 `{ 编号: url }`，编号 ∈ `0-999999`（前导 0 归一化），最多 1000 条；内置 22 条默认 |
+| localStorage | `fm_webjumps_seed` | 已套用的内置默认版本号（`WEB_SEED_VERSION`），用于一次性补全缺失的内置编号 |
 | localStorage | `fm_history` | 本地曲目播放记录 `[{ name, fileName, path, ts }]`，最多 2000 条，用于导出 `.m3u` |
 | IndexedDB | `fm-pwa-db` / `handles` / `music-dir` | 上次选择的音乐文件夹句柄 |
 
