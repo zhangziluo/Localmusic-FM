@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-console.log('极简FM · app.js?v=7 已加载');
+console.log('极简FM · app.js?v=10 已加载');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -58,8 +58,30 @@ const UNLOCK_TRACKS = 15;   // 曲库超过该数量后解锁 CH3-CH9
 const MAX_PLAY_SECONDS = 10000 * 3600; // 到 10000:00:00 即归零，最大显示 9999:59:59
 
 // 网络串流可绑定的按键：3-9 与 * 0（1 随机 / 2 红心 保留给本地曲库）
-// '#' 让位给按序号点歌（前缀 + 确认），不再用于网络串流
+// 另开放编号 10-9999：没有实体键，通过 # 选号（输入编号后按 #）触发播放
+// '#' 让位给按序号点歌 / 选台（前缀 + 确认），不再用于网络串流
 const STREAM_KEYS = ['3', '4', '5', '6', '7', '8', '9', '*', '0'];
+const MAX_STREAMS = 1000;      // 默认最多保存 1000 条串流地址
+const MAX_STREAM_NUM = 9999;   // 编号上限，与选号输入位数一致
+
+// 校验并规范化串流键：实体键原样返回，数字编号统一去掉前导 0；非法返回 null
+function parseStreamKey(raw) {
+  const key = String(raw == null ? '' : raw).trim();
+  if (STREAM_KEYS.includes(key)) return key;
+  if (!/^\d{1,4}$/.test(key)) return null;
+  const n = parseInt(key, 10);
+  if (!Number.isFinite(n) || n < 3 || n > MAX_STREAM_NUM) return null;
+  return String(n);
+}
+
+// 数字编号（可通过 # 选号触发）与实体键分开排序
+function isNumericStreamKey(key) {
+  return /^\d+$/.test(key) && +key > 9;
+}
+function sortStreamKeys(keys) {
+  const rank = k => (k === '*' ? 10001 : k === '0' ? 10002 : +k);
+  return keys.slice().sort((a, b) => rank(a) - rank(b));
+}
 
 function saveStreams() {
   try { localStorage.setItem('fm_streams', JSON.stringify(state.streams)); }
@@ -70,11 +92,14 @@ function loadStreams() {
   try {
     const obj = JSON.parse(localStorage.getItem('fm_streams') || '{}');
     if (!obj || typeof obj !== 'object') return out;
-    for (const k of STREAM_KEYS) {
-      const v = obj[k];
+    for (const rawKey of Object.keys(obj)) {
+      if (Object.keys(out).length >= MAX_STREAMS) break;
+      const key = parseStreamKey(rawKey);
+      if (!key) continue;
+      const v = obj[rawKey];
       if (v && typeof v.name === 'string' && typeof v.url === 'string'
           && /^https?:\/\//i.test(v.url)) {
-        out[k] = { name: v.name.slice(0, 40), url: v.url };
+        out[key] = { name: v.name.slice(0, 40), url: v.url };
       }
     }
   } catch (e) { console.log('读取网络串流失败:', e); }
@@ -91,10 +116,23 @@ const state = {
   streams: {}, mode: 'local', streamKey: null,
 };
 
+// 整点报时运行态（变量须在 updateClock 首次调用前初始化）
+let chiming = false;          // 报时进行中，防重入
+let lastChimedKey = '';       // 已报过的整点（年月日时），同一小时只报一次
+let chimeResume = false;      // 报时前是否在播放，决定结束后是否恢复
+
 // ============ 按序号点歌（# → 数字 → #）============
 const dial = { active: false, buf: '', timer: 0 };
 const DIAL_TIMEOUT = 5000;   // 选号态 5 秒无操作自动取消
 const MAX_DIAL_DIGITS = 4;   // 最多输入 4 位（9999 首）
+
+// ============ 彩蛋：数字键连击 ============
+// 连续按出 19930214 或 930214，新窗口打开 create.myfami.cn
+const EGG_CODES = ['19930214', '930214'];
+const EGG_URL = 'https://create.myfami.cn/';
+const EGG_TIMEOUT = 4000;    // 超过该间隔未继续输入则重新计数
+let eggBuf = '';
+let eggTimer = 0;
 
 // ============ 界面主题 ============
 const THEME_COLORS = ['#ff8c42','#42c02e','#007bff','#8b5cf6','#ec4899','#ef4444','#06b6d4','#6b7280'];
@@ -195,6 +233,7 @@ function updateClock() {
   const s = String(now.getSeconds()).padStart(2,'0');
   const el = $('#dash-time');
   if (el) el.textContent = `${h}:${m}:${s}`;
+  maybeChime(now);
 }
 updateClock(); setInterval(updateClock, 1000);
 
@@ -379,6 +418,150 @@ function setNoiseVolume(v) {
   noiseGain.gain.cancelScheduledValues(t);
   noiseGain.gain.setValueAtTime(noiseGain.gain.value, t);
   noiseGain.gain.linearRampToValueAtTime(state.noiseVolume, t + 0.12);
+}
+
+// ============ 整点报时 ============
+// 播放中每逢整点：先响「12 小时制的小时数」声哔，再用系统 TTS 播报
+// 地点按设备时区推断（离线零依赖）：中国时区报「北京」，其余报当地城市
+const CHINA_TIMEZONES = [
+  'Asia/Shanghai', 'Asia/Chongqing', 'Asia/Harbin', 'Asia/Urumqi',
+];
+const CITY_NAMES = {
+  'Asia/Hong_Kong': '香港', 'Asia/Macau': '澳门', 'Asia/Taipei': '台北',
+  'Asia/Tokyo': '东京', 'Asia/Seoul': '首尔', 'Asia/Singapore': '新加坡',
+  'Asia/Bangkok': '曼谷', 'Asia/Dubai': '迪拜', 'Asia/Kolkata': '加尔各答',
+  'Asia/Jakarta': '雅加达', 'Asia/Manila': '马尼拉', 'Asia/Karachi': '卡拉奇',
+  'Europe/London': '伦敦', 'Europe/Paris': '巴黎', 'Europe/Berlin': '柏林',
+  'Europe/Moscow': '莫斯科', 'Europe/Madrid': '马德里', 'Europe/Rome': '罗马',
+  'America/New_York': '纽约', 'America/Los_Angeles': '洛杉矶',
+  'America/Chicago': '芝加哥', 'America/Toronto': '多伦多',
+  'America/Vancouver': '温哥华', 'America/Sao_Paulo': '圣保罗',
+  'Australia/Sydney': '悉尼', 'Australia/Melbourne': '墨尔本',
+  'Pacific/Auckland': '奥克兰',
+};
+const CHIME_BEEP_HZ = 880;
+const CHIME_BEEP_LEN = 0.14;   // 单声时长（秒）
+const CHIME_BEEP_GAP = 0.26;   // 间隔（秒）
+
+function resolveLocation(tz) {
+  tz = tz || '';
+  if (CHINA_TIMEZONES.includes(tz)) return '北京';
+  if (CITY_NAMES[tz]) return CITY_NAMES[tz];
+  const city = tz.split('/').pop() || '';
+  if (!city) return '本地';
+  if (/^(GMT|UTC)/i.test(city)) return 'UTC';
+  return city.replace(/_/g, ' ');
+}
+
+function deviceTimezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// 12 小时制小时数：0 点与 12 点都是 12 下
+function chimeHour12(h) {
+  return h % 12 === 0 ? 12 : h % 12;
+}
+
+const CN_HOURS = ['零', '一', '两', '三', '四', '五', '六', '七', '八', '九', '十', '十一', '十二'];
+function chimeHourText(h) {
+  return CN_HOURS[chimeHour12(h)];
+}
+
+// 12 小时制时段，避免「一点整」分不清上午/下午
+function chimePeriod(h) {
+  if (h < 6) return '凌晨';
+  if (h < 12) return '上午';
+  if (h === 12) return '中午';
+  if (h < 18) return '下午';
+  return '晚上';
+}
+
+function buildChimeText(date, location) {
+  const h = date.getHours();
+  return `现在是${location}时间${chimePeriod(h)}${chimeHourText(h)}点整`;
+}
+
+// 用 Web Audio 合成短促「哔」声，count 声播完后回调
+function playChimeBeeps(count, done) {
+  const ctx = ensureNoiseCtx();
+  if (!ctx || typeof ctx.createOscillator !== 'function') { done(); return; }
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const start = ctx.currentTime + 0.05;
+  for (let i = 0; i < count; i++) {
+    const t = start + i * (CHIME_BEEP_LEN + CHIME_BEEP_GAP);
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = CHIME_BEEP_HZ;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.35, t + 0.012);
+    gain.gain.setValueAtTime(0.35, t + CHIME_BEEP_LEN - 0.02);
+    gain.gain.linearRampToValueAtTime(0, t + CHIME_BEEP_LEN);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + CHIME_BEEP_LEN + 0.02);
+  }
+  setTimeout(done, (count * (CHIME_BEEP_LEN + CHIME_BEEP_GAP) + 0.1) * 1000);
+}
+
+// 系统 TTS 播报，结束（或不可用 / 超时）后回调
+function speakChime(text, done) {
+  const synth = window.speechSynthesis;
+  const Utterance = window.SpeechSynthesisUtterance;
+  if (!synth || typeof synth.speak !== 'function' || typeof Utterance !== 'function') {
+    done();
+    return;
+  }
+  let finished = false;
+  const finish = () => { if (finished) return; finished = true; done(); };
+  try {
+    const u = new Utterance(text);
+    u.lang = 'zh-CN';
+    u.rate = 1;
+    u.onend = finish;
+    u.onerror = finish;
+    synth.speak(u);
+    // 兜底：部分浏览器 onend 不触发，按文本长度估算上限
+    setTimeout(finish, Math.max(6000, text.length * 450));
+  } catch (e) {
+    finish();
+  }
+}
+
+function finishChime() {
+  chiming = false;
+  const resume = chimeResume;
+  chimeResume = false;
+  if (resume && state.playing) {
+    const p = audio.play();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  }
+}
+
+function runChime(date) {
+  if (chiming) return;
+  chiming = true;
+  chimeResume = state.playing;
+  if (chimeResume) audio.pause();   // 暂停音乐/串流；pause 监听里会停底噪
+  const led = $('#led');
+  if (led) led.textContent = '整点报时';
+  const text = buildChimeText(date, resolveLocation(deviceTimezone()));
+  playChimeBeeps(chimeHour12(date.getHours()), () => speakChime(text, finishChime));
+}
+
+function maybeChime(now) {
+  if (chiming || !state.playing) return;
+  // 整点后 2 秒内都算，容忍定时器漂移
+  if (now.getMinutes() !== 0 || now.getSeconds() > 2) return;
+  const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}`;
+  if (key === lastChimedKey) return;
+  lastChimedKey = key;
+  runChime(now);
 }
 
 audio.addEventListener('play', () => {
@@ -801,17 +984,25 @@ function playStream(key, stream) {
   });
 
   $('#track-title').textContent = stream.name;
-  $('#track-sub').textContent = `${key} 键 · 网络直播`;
+  $('#track-sub').textContent = `${isNumericStreamKey(key) ? `${key} 号` : `${key} 键`} · 网络直播`;
   $('#btn-heart').classList.remove('active');
   const bar = $('#progress-bar');
   if (bar) bar.style.width = '100%';
   $('#led').textContent = `网络串流 · ${stream.name}`;
 }
 
-// ============ 按序号点歌（# → 数字 → #）============
+// ============ 按序号点歌 / 选台（# → 数字 → #）============
 // 序号 1 起算、按导入顺序；1（随机）/ 2（红心）恒不可选，有效范围 3 ~ tracks.length
-function dialRangeText() {
-  return state.tracks.length >= 3 ? `3–${state.tracks.length}` : '暂无可用序号';
+// 输入的数字若已绑定网络串流（含 3-9 与 10-9999），优先播放串流，否则按序号点歌
+function hasNumericStreams() {
+  return Object.keys(state.streams).some(isNumericStreamKey);
+}
+
+function dialHintText() {
+  const parts = [];
+  if (state.tracks.length >= 3) parts.push(`3–${state.tracks.length} 点歌`);
+  if (hasNumericStreams()) parts.push('已绑定串流编号');
+  return parts.length ? parts.join(' / ') : '暂无可用编号';
 }
 
 function renderDash() {
@@ -845,14 +1036,14 @@ function cancelDial(silent = true) {
 
 function startDial() {
   if (dial.active) return;
-  if (state.tracks.length < 3) {
+  if (state.tracks.length < 3 && !hasNumericStreams()) {
     $('#led').textContent = '曲目不足 3 首 · 无法按序号点歌';
     return;
   }
   dial.active = true;
   dial.buf = '';
   renderDial();
-  $('#led').textContent = `选号：输入 ${dialRangeText()} 后按 #`;
+  $('#led').textContent = `选号：输入 ${dialHintText()} · 按 # 确认`;
   armDialTimer();
 }
 
@@ -891,13 +1082,28 @@ function jumpToTrack(n) {
 function confirmDial() {
   if (!dial.active) return;
   if (!dial.buf) {
-    $('#led').textContent = `请先输入序号（${dialRangeText()}）`;
+    $('#led').textContent = `请先输入编号（${dialHintText()}）`;
     armDialTimer();
     return;
   }
   const n = parseInt(dial.buf, 10);
-  if (!Number.isFinite(n) || n < 3 || n > state.tracks.length) {
-    $('#led').textContent = `序号无效 · 请输入 ${dialRangeText()}`;
+  if (!Number.isFinite(n)) {
+    $('#led').textContent = `编号无效 · ${dialHintText()}`;
+    dial.buf = '';
+    renderDial();
+    armDialTimer();
+    return;
+  }
+  // 串流优先：该编号绑定了网络串流就直接播放
+  const key = String(n);
+  const stream = state.streams[key];
+  if (stream) {
+    cancelDial(true);
+    playStream(key, stream);
+    return;
+  }
+  if (n < 3 || n > state.tracks.length) {
+    $('#led').textContent = `序号无效 · ${dialHintText()}`;
     dial.buf = '';
     renderDial();
     armDialTimer();
@@ -911,9 +1117,39 @@ function handleHashKey() {
   else startDial();
 }
 
+// ============ 彩蛋：数字键连击 ============
+function resetEggBuffer() {
+  eggBuf = '';
+  if (eggTimer) { clearTimeout(eggTimer); eggTimer = 0; }
+}
+
+function openEasterEgg() {
+  cancelDial(true);
+  $('#led').textContent = '彩蛋已触发 · 正在打开…';
+  try {
+    const win = window.open(EGG_URL, '_blank', 'noopener,noreferrer');
+    if (win) win.opener = null;
+  } catch (e) { console.log('彩蛋打开失败:', e); }
+}
+
+function recordEggDigit(d) {
+  if (!/^[0-9]$/.test(d)) return false;
+  eggBuf = (eggBuf + d).slice(-8);   // 只需保留最近 8 位
+  if (eggTimer) clearTimeout(eggTimer);
+  eggTimer = setTimeout(resetEggBuffer, EGG_TIMEOUT);
+  if (EGG_CODES.some(code => eggBuf.endsWith(code))) {
+    resetEggBuffer();
+    openEasterEgg();
+    return true;
+  }
+  return false;
+}
+
 document.querySelectorAll('.key[data-ch]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.ch;
+    if (recordEggDigit(key)) return;   // 彩蛋命中则终止常规处理
+
     // 选号态下 1-9 作为数字位（不切频道）
     if (dial.active) { dialDigit(key); return; }
 
@@ -933,6 +1169,7 @@ document.querySelectorAll('.key[data-ch]').forEach(btn => {
 document.querySelectorAll('.key[data-key]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.key;
+    if (recordEggDigit(key)) return;   // 0 也参与彩蛋连击
     if (key === '#') { handleHashKey(); return; }
     if (dial.active) {
       if (key === '*') { cancelDial(false); return; }
@@ -984,13 +1221,14 @@ $('#btn-settings').addEventListener('click', () => {
       </div>
       <div class="row stream-head">
         <span>网络串流</span>
+        <span class="stream-cap" id="s-stream-cap"></span>
         <button type="button" id="s-stream-add" class="mini-btn">＋ 添加</button>
       </div>
       <div id="s-stream-list" class="stream-list"></div>
       <div id="s-stream-form" class="stream-form" style="display:none;">
         <input id="s-stream-name" type="text" placeholder="名称，如 城市爵士" maxlength="40">
         <input id="s-stream-url" type="text" placeholder="https://example.com/live.mp3" autocomplete="off" spellcheck="false">
-        <select id="s-stream-key"></select>
+        <input id="s-stream-key" type="text" placeholder="按键/编号：3–9、*、0 或 10–9999（留空自动分配）" maxlength="4" autocomplete="off" spellcheck="false">
         <div class="stream-form-actions">
           <button type="button" id="s-stream-save" class="mini-btn">确认添加</button>
           <button type="button" id="s-stream-cancel" class="mini-btn ghost">取消</button>
@@ -1009,14 +1247,22 @@ $('#btn-settings').addEventListener('click', () => {
   const draft = JSON.parse(JSON.stringify(state.streams));
   const listEl = mask.querySelector('#s-stream-list');
   const formEl = mask.querySelector('#s-stream-form');
-  const keySel = mask.querySelector('#s-stream-key');
+  const keyInp = mask.querySelector('#s-stream-key');
   const nameInp = mask.querySelector('#s-stream-name');
   const urlInp = mask.querySelector('#s-stream-url');
   const errEl = mask.querySelector('#s-stream-err');
   const addBtn = mask.querySelector('#s-stream-add');
+  const capEl = mask.querySelector('#s-stream-cap');
+
+  // 优先分配空闲实体键，用完后从 10 起找最小空闲编号
+  function nextFreeStreamKey() {
+    for (const k of STREAM_KEYS) if (!draft[k]) return k;
+    for (let n = 10; n <= MAX_STREAM_NUM; n++) if (!draft[String(n)]) return String(n);
+    return '';
+  }
 
   function renderStreams() {
-    const keys = STREAM_KEYS.filter(k => draft[k]);
+    const keys = sortStreamKeys(Object.keys(draft));
     listEl.innerHTML = keys.length ? keys.map(k => `
       <div class="stream-item">
         <span class="stream-key">${k}</span>
@@ -1028,11 +1274,8 @@ $('#btn-settings').addEventListener('click', () => {
       </div>`).join('')
       : '<div class="stream-empty">还没有网络串流，点右上角「＋ 添加」</div>';
 
-    const free = STREAM_KEYS.filter(k => !draft[k]);
-    const prev = keySel.value;
-    keySel.innerHTML = free.map(k => `<option value="${k}">按键 ${k}</option>`).join('');
-    if (free.includes(prev)) keySel.value = prev;
-    addBtn.disabled = free.length === 0;
+    if (capEl) capEl.textContent = `${keys.length} / ${MAX_STREAMS}`;
+    addBtn.disabled = keys.length >= MAX_STREAMS;
   }
 
   listEl.addEventListener('click', e => {
@@ -1043,22 +1286,29 @@ $('#btn-settings').addEventListener('click', () => {
   });
 
   addBtn.addEventListener('click', () => {
-    if (!STREAM_KEYS.some(k => !draft[k])) return;
-    renderStreams();
+    if (Object.keys(draft).length >= MAX_STREAMS) return;
     formEl.style.display = 'flex';
     errEl.textContent = '';
     nameInp.value = '';
     urlInp.value = '';
+    keyInp.value = nextFreeStreamKey();
     nameInp.focus();
   });
 
   mask.querySelector('#s-stream-save').addEventListener('click', () => {
     const name = nameInp.value.trim();
     const url = urlInp.value.trim();
-    const key = keySel.value;
+    const rawKey = keyInp.value;
     if (!name) { errEl.textContent = '请填写流名称'; return; }
     if (!/^https?:\/\//i.test(url)) { errEl.textContent = '流地址需以 http:// 或 https:// 开头'; return; }
-    if (!key) { errEl.textContent = '没有可绑定的按键'; return; }
+    let key = parseStreamKey(rawKey);
+    if (!key && !rawKey.trim()) key = nextFreeStreamKey();
+    if (!key) { errEl.textContent = '按键需为 3–9、*、0，或 3–9999 的编号（1/2 保留）'; return; }
+    if (draft[key]) { errEl.textContent = `编号 ${key} 已被占用，请先删除或换一个`; return; }
+    if (Object.keys(draft).length >= MAX_STREAMS) {
+      errEl.textContent = `最多保存 ${MAX_STREAMS} 条串流地址`;
+      return;
+    }
     draft[key] = { name: name.slice(0, 40), url };
     formEl.style.display = 'none';
     errEl.textContent = '';

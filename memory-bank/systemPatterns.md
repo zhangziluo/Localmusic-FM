@@ -5,8 +5,8 @@
 单页 + 单脚本，无模块系统。`app.js` 按区块顺序组织，全部依赖挂在一个全局 `state` 对象上，选号态另有模块级 `dial`：
 
 ```
-IndexedDB helpers → 常量（STREAM_KEYS）→ state + dial
-→ 主题 → init(IIFE) → 时钟/时长 → 音频/底噪 → 曲库播放 → 推子 → 控制栏 → 导入/恢复
+IndexedDB helpers → 常量（STREAM_KEYS）→ state + dial + 报时态
+→ 主题 → init(IIFE) → 时钟/时长（含整点报时）→ 音频/底噪 → 曲库播放 → 推子 → 控制栏 → 导入/恢复
 → 频道+网络串流 → 按序号点歌 → 设置面板 → 键盘 → SW 注册
 ```
 
@@ -34,7 +34,7 @@ const MAX_DIAL_DIGITS = 4;   // 最多 4 位序号
 ```
 
 约定：
-- `state.ch` 本地频道时是**数字**，播放串流时是**键位字符串**（`'3'`、`'*'`…）
+- `state.ch` 本地频道时是**数字**，播放串流时是**键位字符串**（实体键 `'3'`、`'*'`，或编号 `'12'`）
 - 判断是否可重置频道用 `typeof state.ch === 'number'`（因此串流不会在曲库变化时被回退）
 - `state.current` 只在本地曲目时有值；串流播放时为 `null`
 
@@ -64,15 +64,32 @@ const MAX_DIAL_DIGITS = 4;   // 最多 4 位序号
 - `#` 点击：始终交给 `handleHashKey()`（进入 / 确认选号），不再播放串流
 - 物理键盘：`0-9 * #` 映射为对应屏幕按键；在 input/select/textarea 内不触发
 
+## 网络串流键位与编号
+
+- `STREAM_KEYS = ['3','4','5','6','7','8','9','*','0']` 只表示九宫格实体键，负责 `refreshChannels()` / `refreshStreamKeys()` 的小字与点击
+- `parseStreamKey(raw)` 统一校验：实体键原样返回；数字编号只接受 `3`–`9999`，归一化前导 0；`1` / `2` / `#` / 5 位以上返回 `null`
+- 存储上限 `MAX_STREAMS = 1000`：`loadStreams()` 逐条过滤并截断；设置面板保存前也校验容量
+- 编号 > 9 没有实体键，播放入口只有 `#` 选号：`confirmDial()` 先查 `state.streams[String(N)]`，命中即 `playStream()`，未命中才按曲目序号点歌
+- `hasNumericStreams()` 用于允许「曲库不足 3 首但已绑定编号串流」的用户进入选号态；`dialHintText()` 组合提示文案
+- 排序统一用 `sortStreamKeys()`：数字编号升序，然后 `*`、`0`
+
 ## 按序号点歌（`#` → 数字 → `#`）
 
-- 状态机：`startDial()` 置 `active`、清 `buf`、`renderDial()` 并在 `#` 键上加 `.dialing`；`dialDigit(d)` 追加数字并重置 5 秒计时；`confirmDial()` 校验后 `jumpToTrack(n)`；`cancelDial()` 清空并 `renderDash()`
+- 状态机：`startDial()` 置 `active`、清 `buf`、`renderDial()` 并在 `#` 键上加 `.dialing`；`dialDigit(d)` 追加数字并重置 5 秒计时；`confirmDial()` 优先查串流编号，否则 `jumpToTrack(n)`；`cancelDial()` 清空并 `renderDash()`
 - 序号：1 起算、按 `state.tracks` 顺序，`N = state.tracks[N-1]`；有效范围 `3 ≤ N ≤ tracks.length`（`1` 随机 / `2` 红心保留）
 - 输入限制：`MAX_DIAL_DIGITS = 4`，首位不能为 `0`
 - 显示：选号期间复用 `#dash-ch` 显示 `#` + `buf`；退出时 `renderDash()` 按 `mode` 恢复频道数字或串流键位
 - 取消：再按 `#` 确认、`*`、播放 / 切歌键，或 `DIAL_TIMEOUT` 超时
 - 跳转：目标曲目无 `file`（授权失效）时先 `ensurePlayable()` 重新扫描，再按 `fileName/name` 找回目标播放
 - 常驻计数：`#lib-count` 在 `refreshChannels()` 中刷新「已导入 N 首 · 选号 3–N」
+
+## 隐藏彩蛋（数字键连击）
+
+- 常量：`EGG_CODES = ['19930214', '930214']`、`EGG_URL`、`EGG_TIMEOUT = 4000`
+- 模块级 `eggBuf` / `eggTimer`；`recordEggDigit(d)` 在数字键点击时先记录（`1`–`9` 与 `0` 都参与），只保留最近 8 位
+- 匹配方式为后缀匹配，因此 `19930214` 末尾的 `930214` 也成立；命中后清空缓冲，避免重复触发
+- 命中时 `recordEggDigit` 返回 `true`，两个点击处理器立即 `return`，避免后续频道 / 选号 / 串流逻辑覆盖 LED 提示
+- `openEasterEgg()` 先 `cancelDial(true)`，再 `window.open('https://create.myfami.cn/', '_blank', 'noopener,noreferrer')`；在用户点击手势内同步调用，避免被弹窗拦截
 
 ## 主题系统
 
@@ -87,7 +104,8 @@ const MAX_DIAL_DIGITS = 4;   // 最多 4 位序号
 
 - 每次点击齿轮动态创建 `.sheet-mask`，`innerHTML` 模板 + 事件绑定
 - 主题/强调色为**实时预览**，关闭时若未点「完成」则回滚
-- 网络串流用**临时副本 `draft`**：增删只改副本，点「完成」才 `state.streams = draft; saveStreams()`
+- 网络串流用**临时副本 `draft`**：增删只改副本，点「完成」才 `state.streams = draft; saveStreams()`；按键 / 编号用文本框输入（`parseStreamKey` 校验，留空自动分配 `nextFreeStreamKey()`）
+- 标题右侧 `#s-stream-cap` 显示 `N / 1000`，达到上限后「＋ 添加」禁用
 - 点遮罩 = 取消（主题回滚，串流改动全部丢弃）
 - 删除正在播放的串流：点「完成」后停止播放、清 `mode` 并回到 CH1
 
@@ -97,6 +115,16 @@ const MAX_DIAL_DIGITS = 4;   // 最多 4 位序号
 - 首次交互 `pointerdown`/`keydown` 解锁 AudioContext
 - 淡入 300ms / 淡出 250ms，音量变化 120ms 线性斜坡
 - 底噪与音乐音量完全独立，分别由两个竖推子控制
+
+## 整点报时
+
+- 触发链：`updateClock()`（每秒）→ `maybeChime(now)`；条件 `state.playing && !chiming && 分===0 && 秒<=2`，`lastChimedKey` 做小时级去重
+- 哔声：`playChimeBeeps(count, done)` 复用 `ensureNoiseCtx()`，用 `OscillatorNode`（880Hz、140ms、间隔 260ms）逐声调度，`count = chimeHour12(hour)`（0/12 点 = 12）
+- 文案：`chimePeriod()` + 中文数字 `CN_HOURS`（2 读「两」）→ `现在是${地点}时间${时段}${小时}点整`
+- 地点：`resolveLocation(timeZone)`；中国时区列表 → 北京；`CITY_NAMES` 常见城市中译；其余取时区城市段
+- TTS：`speakChime()` 用 `speechSynthesis.speak()`，`onend` / `onerror` / 6 秒兜底 → `finishChime()`
+- 暂停/恢复：`runChime()` 先 `audio.pause()` 并记录 `chimeResume`；`finishChime()` 仅当 `state.playing` 仍为真才 `audio.play()`
+- **坑**：`chiming` / `lastChimedKey` / `chimeResume` 必须在 `updateClock()` 首次同步调用前初始化，否则 TDZ 报错
 
 ## 代码约定
 

@@ -623,6 +623,7 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
 .sheet .mini-btn.ghost { color: var(--panel-ink); opacity: .7; }
 .sheet .mini-btn:disabled { opacity: .4; cursor: not-allowed; }
 .sheet .row.stream-head { margin-bottom: 4px; }
+.stream-cap { font-size: 11px; opacity: .5; margin-left: auto; margin-right: 10px; }
 
 .stream-list { margin: -2px 0 6px; }
 .stream-item {
@@ -635,6 +636,7 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
 .stream-key {
   flex: 0 0 auto;
   min-width: 26px;
+  padding: 0 6px;
   height: 26px;
   border-radius: 7px;
   background: var(--accent);

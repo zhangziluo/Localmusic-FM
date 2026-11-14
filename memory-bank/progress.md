@@ -13,37 +13,66 @@
 | v4 网络串流 | 设置内添加串流、绑定 3-9 / `*` / `0` / `#`、直播播放适配 | ✅ |
 | 精简（未提交） | 移除 RSS 播客功能，`#` 恢复为普通网络串流绑定键 | ✅ |
 | v5 点歌（未提交） | `#` → 数字 → `#` 按序号跳转；`#` 退出网络串流绑定；新增常驻「已导入 N 首」 | ✅ |
+| 彩蛋（未提交） | 数字键连击 `19930214` / `930214` → 新窗口打开 `create.myfami.cn` | ✅ |
+| v6 串流编号（未提交） | 串流可绑定 `10`–`9999` 编号，`#` 选号播流（串流优先），最多 1000 条 | ✅ |
+| v7 整点报时（未提交） | 播放中整点：12 小时制哔声（Web Audio）+ 系统 TTS 报时，时区推断地点，暂停后自动恢复 | ✅ |
 
 ## 当前实现清单
 
 - 曲库：递归扫描、覆盖/追加导入、索引持久化、文件夹句柄自动恢复（Chromium）
 - 播放：随机、收藏频道 CH2、CH3-9（>15 首解锁）、上一首/下一首随机
-- 网络串流：`STREAM_KEYS = 3-9 * 0`（1/2 禁止绑定，`#` 用于点歌），一键一流，直播流进度条 100%，删除后停止
-- 按序号点歌：`#` 进入 → 多位数字 → `#` 确认；`1`/`2` 与越界拒绝，`*`/传输键/5 秒超时取消；授权失效时先恢复再跳转
+- 网络串流：实体键 `STREAM_KEYS = 3-9 * 0` 一键一流；另可绑定编号 `10`–`9999`，通过 `#` 选号播放；直播流进度条 100%，删除后停止
+- 串流编号：`parseStreamKey()` 校验 / 归一化，`loadStreams()` 最多读取 1000 条；设置面板文本框输入 + 用量显示（`N / 1000`），重复 / 非法编号拒绝
+- 按序号点歌：`#` 进入 → 多位数字 → `#` 确认；先匹配串流编号，未命中再按曲目序号；`1`/`2` 与越界拒绝，`*`/传输键/5 秒超时取消；授权失效时先恢复再跳转
+- 整点报时：播放中整点触发，`updateClock()` 每秒检查；12 小时制哔声 + 系统 TTS「现在是〔地点〕时间〔时段〕〔中文小时〕点整」；地点按设备时区推断；报时暂停播放、结束恢复；同小时去重
 - 音量：音乐 / 底噪双竖推子，实时平滑
 - 主题：dark / led / crt / cream / tube + 主题色圆点 + meta theme-color
 - 底噪：粉红噪声 + 海浪混合，仅播放时出现
 - 数据卡片：实时时钟、CH（串流时显示键位）、累计时长（9999:59:59 归零 + 0.2s 重启动画）
-- PWA：SW 离线缓存 fm-pwa-v15、manifest、安装
+- PWA：SW 离线缓存 fm-pwa-v18、manifest、安装
 - 设置面板：主题色 / 界面主题 / 底噪 / 口播间隔 / 网络串流 / 完成
 - 快捷键：Space、←、→、0-9、`*`、`#`（`#` 进入/确认选号，`*` 取消）
 
-## 最近一次变更（新增按序号点歌）
+## 最近一次变更（整点报时 + 按序号点歌 + 串流编号）
 
-新增内容：
+整点报时：
+- 常量/状态：`CHIME_BEEP_HZ = 880`、`CHIME_BEEP_LEN = 0.14`、`CHIME_BEEP_GAP = 0.26`；模块级 `chiming` / `lastChimedKey` / `chimeResume`（必须在 `updateClock` 首次调用前初始化，避免 TDZ）
+- 触发：`updateClock()` 每秒调用 `maybeChime(now)`；仅 `state.playing` 为真、`分 === 0`、`秒 ≤ 2` 时触发；`lastChimedKey = 年-月-日-时` 去重
+- 哔声：`playChimeBeeps(count, done)` 复用 `ensureNoiseCtx()`，用 `OscillatorNode` 合成 880Hz 短音，count = `chimeHour12(hour)`（0/12 点 = 12 声）
+- 文案：`buildChimeText()` = `现在是${地点}时间${时段}${中文小时}点整`；时段 `凌晨/上午/中午/下午/晚上`，中文数字 2 读「两」
+- 地点：`resolveLocation(tz)`；中国时区 → `北京`；内置常见城市中译；其余取时区城市段
+- TTS：`speakChime()` 用 `speechSynthesis`；`onend` / `onerror` / 超时兜底后 `finishChime()`
+- 暂停/恢复：报时前 `audio.pause()` 并记录 `chimeResume`；结束后仅当 `state.playing` 仍为真才 `audio.play()`
+- LED：报时期间显示「整点报时」
+
+串流编号：
+- 常量：`MAX_STREAMS = 1000`、`MAX_STREAM_NUM = 9999`；`STREAM_KEYS` 仍只表示九宫格实体键
+- 校验：`parseStreamKey(raw)` 接受 `3`–`9`、`*`、`0` 与编号 `3`–`9999`（前导 0 归一化，`1`/`2`/`#`/5 位以上拒绝）；`isNumericStreamKey()` 区分编号与实体键；`sortStreamKeys()` 排序列表
+- 存储：`loadStreams()` 遍历任意键并限制 1000 条；设置面板用 `draft` + 文本输入，重复 / 非法 / 超限时在 `#s-stream-err` 提示；标题右侧显示 `N / 1000`
+- 播放：`confirmDial()` 先查 `state.streams[String(N)]`，命中则 `cancelDial(true)` + `playStream()`；未命中再按 `3 ≤ N ≤ tracks.length` 点歌
+- 选号：`hasNumericStreams()` 让「只有串流、曲目不足 3 首」的用户仍能进入选号态；提示文案由 `dialHintText()` 组合
+- UI：编号 > 9 的串流在 `#track-sub` 显示「N 号 · 网络直播」（实体键仍为「N 键」）
+
+点歌：
 - 常量/状态：`dial = { active, buf, timer }`、`DIAL_TIMEOUT = 5000`、`MAX_DIAL_DIGITS = 4`
-- 选号逻辑：`dialRangeText` / `renderDash` / `renderDial` / `armDialTimer` / `cancelDial` / `startDial` / `dialDigit` / `jumpToTrack` / `confirmDial` / `handleHashKey`
+- 选号逻辑：`dialHintText` / `renderDash` / `renderDial` / `armDialTimer` / `cancelDial` / `startDial` / `dialDigit` / `jumpToTrack` / `confirmDial` / `handleHashKey`
 - 交互：`#` 进入 / 确认；选号态下数字键与 `0` 作为数字位、`*` 取消；播放 / 切歌键取消
 - 跳转：`N = state.tracks[N-1]`，校验 `3 ≤ N ≤ tracks.length`；授权失效时先 `ensurePlayable()` 再按文件名找回
 - UI：`#dash-ch` 显示 `#` + 输入；`#lib-count` 常驻「已导入 N 首 · 选号 3–N」；`.key.dialing` 呼吸动画
+
+彩蛋：
+- 常量：`EGG_CODES = ['19930214', '930214']`、`EGG_URL = 'https://create.myfami.cn/'`、`EGG_TIMEOUT = 4000`
+- 状态：`eggBuf`（保留最近 8 位）、`eggTimer`
+- 逻辑：`recordEggDigit()` 在数字键点击时先记录，命中后 `return true` 终止常规按键处理；`openEasterEgg()` 取消选号并 `window.open(..., '_blank', 'noopener,noreferrer')`
+- 触发后 LED 提示「彩蛋已触发 · 正在打开…」
 
 调整内容：
 - `STREAM_KEYS` 去掉 `#` → `['3','4','5','6','7','8','9','*','0']`；`loadStreams()` 自动忽略历史 `#` 绑定
 - `refreshStreamKeys()` 对 `#` 固定显示「点歌」
 
 版本：
-- `style.css?v=8`、`app.js?v=7`、SW `fm-pwa-v15`
-- `app.js` 启动日志：`极简FM · app.js?v=7 已加载`
+- `style.css?v=9`、`app.js?v=10`、SW `fm-pwa-v18`
+- `app.js` 启动日志：`极简FM · app.js?v=10 已加载`
 
 上一轮（已保留）：移除 RSS 播客，`state.mode` 仅 `local` / `stream`，删除播客数据层与 `fm_podcasts`。
 
@@ -51,7 +80,7 @@
 
 ```
 node --check app.js / sw.js                              → OK
-jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js）→ 回归与选号全通过
+jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、test-streams.js、test-chime.js）→ 全部通过
 ```
 
 选号测试覆盖：
@@ -63,6 +92,28 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js）→ 回归与选�
   · 含 0 的多位序号（#20）跳转                         ✔
   · * / 切歌键 / 5 秒超时取消与数码屏恢复              ✔
   · 选号态下 3 作为数字位、不切频道                    ✔
+  · 彩蛋 19930214 / 930214 触发、普通数字不触发        ✔
+```
+
+串流编号测试覆盖（test-streams.js）：
+```
+  · parseStreamKey：10 / 010 / 3 / * / 0 通过，1/2/10000/# 拒绝  ✔
+  · loadStreams：旧 # / 1 / 5 位编号 / 非法键被过滤，上限 1000  ✔
+  · 设置面板：默认分配、添加 123、重复/非法拒绝、留空自动分配  ✔
+  · #10# / #99# 播流（99 超出曲目数）、#3# 串流优先于频道     ✔
+  · #12# 未绑定回退点歌；删除编号后不再播流                   ✔
+  · 删除正在播放的 0 后停止并回到 CH1                          ✔
+```
+
+整点报时测试覆盖（test-chime.js）：
+```
+  · 中国时区→北京、东京/纽约中译、未知时区取城市名、无时区→UTC  ✔
+  · 0/12 点 12 声、13 点 1 声、23 点 11 声                      ✔
+  · 13/0/12/23 点中文文案（下午一点 / 凌晨十二点 / 中午十二点 / 晚上十一点） ✔
+  · 未播放不报时、非整点（分钟≠0、秒>2）不报时                  ✔
+  · 13 点集成：1 声、暂停音乐、TTS 文案、结束后恢复播放          ✔
+  · 东京时区 14 点：2 声 + 「现在是东京时间下午两点整」          ✔
+  · 同一整点只报一次（去重）                                     ✔
 ```
 
 历史记录（网络串流，v4）：
@@ -85,7 +136,9 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js）→ 回归与选�
 6. **自动恢复文件夹**：仅 Chromium；Safari/Firefox 每次需重新选择
 7. **无 Media Session / 锁屏控制**
 8. **时长上限**：9999:59:59 后归零（设计如此，会触发重启动画）
-9. **仓库状态**：`b2becff` 已包含 v4 网络串流；本轮改动（移除播客 + 按序号点歌，涉及 app.js / style.css / index.html / sw.js / README / memory-bank）尚未提交
+9. **仓库状态**：`b2becff` 已包含 v4 网络串流；本轮改动（移除播客 + 按序号点歌 + 彩蛋 + 串流编号 + 整点报时，涉及 app.js / style.css / index.html / sw.js / README / memory-bank）尚未提交
+10. **整点报时依赖系统 TTS**：缺少中文语音时可能读英文或不出声；后台标签页定时器被节流时可能延迟 / 跳过
+11. **报时恢复受自动播放策略影响**：非用户手势下 `audio.play()` 可能被拒绝，报时结束后停在暂停状态
 
 ## 关键决策记录
 
@@ -102,6 +155,11 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js）→ 回归与选�
 | 序号口径 | 1 起算、按 `state.tracks` 顺序，有效 `3 ~ tracks.length` | 与用户「1 随机 / 2 红心」的心智一致 |
 | 多位输入 | 支持最多 4 位，首位不能是 0 | 大曲库需要；避免 `03` 这类歧义 |
 | 跳转后下一首 | 仍是随机，不建立顺序队列 | 保持 iPod shuffle 的核心体验 |
+| 彩蛋实现 | 全局数字连击缓冲 + 后缀匹配，4 秒过期 | 不打断频道 / 选号逻辑；`930214` 作为 `19930214` 的短码也能触发 |
+| 报时小时制 | **12 小时制**（用户确认）：13 点 = 1 声、「下午一点整」 | 符合传统报时钟直觉，避免 23 点响 23 声 |
+| 报时地点 | **时区推断**（用户确认）：中国时区 → 北京，其余 → 当地城市 | 离线零依赖，不请求第三方 IP 接口 |
+| 报时期间播放 | **暂停音乐/串流**（用户确认）：报完自动继续 | 报时清晰，不被音乐盖住 |
+| 报时音色 | Web Audio `OscillatorNode` 880Hz 短音 | 零音频资源、可精确控制声数与节奏 |
 | 音频跨域 | `<audio>` 直接播放远程流，不经代理 | 省流量、避免第三方代理限流 |
 | 测试方式 | 仓库外用 jsdom 临时脚本 | 项目零依赖，不引入测试框架 |
 
@@ -113,4 +171,5 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js）→ 回归与选�
 - [ ] 用真实 https 电台流做一次浏览器端手测（Icecast mp3/aac）
 - [ ] 提交本轮改动（移除播客 + 按序号点歌）与 `memory-bank/`；如需可补 `.gitignore`（`.venv/`、`.DS_Store`、`*.bak`）
 - [ ] 浏览器手测点歌（含授权失效后恢复再跳转，以及选号态下键盘输入）
+- [ ] 浏览器手测整点报时：可在 Console 执行 `maybeChime(new Date(2026,0,1,13,0,0))` 强制触发一次（需先播放）
 - [ ] 可选：Media Session API（锁屏信息 / 媒体键）
