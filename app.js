@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-console.log('极简FM · 串流版 app.js?v=4 已加载');
+console.log('极简FM · app.js?v=7 已加载');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -57,8 +57,9 @@ function isFavorite(name, fileName) {
 const UNLOCK_TRACKS = 15;   // 曲库超过该数量后解锁 CH3-CH9
 const MAX_PLAY_SECONDS = 10000 * 3600; // 到 10000:00:00 即归零，最大显示 9999:59:59
 
-// 网络串流可绑定的按键：3-9 与 * 0 #（1 随机 / 2 红心 保留给本地曲库）
-const STREAM_KEYS = ['3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
+// 网络串流可绑定的按键：3-9 与 * 0（1 随机 / 2 红心 保留给本地曲库）
+// '#' 让位给按序号点歌（前缀 + 确认），不再用于网络串流
+const STREAM_KEYS = ['3', '4', '5', '6', '7', '8', '9', '*', '0'];
 
 function saveStreams() {
   try { localStorage.setItem('fm_streams', JSON.stringify(state.streams)); }
@@ -89,6 +90,11 @@ const state = {
   favorites: new Set(),
   streams: {}, mode: 'local', streamKey: null,
 };
+
+// ============ 按序号点歌（# → 数字 → #）============
+const dial = { active: false, buf: '', timer: 0 };
+const DIAL_TIMEOUT = 5000;   // 选号态 5 秒无操作自动取消
+const MAX_DIAL_DIGITS = 4;   // 最多输入 4 位（9999 首）
 
 // ============ 界面主题 ============
 const THEME_COLORS = ['#ff8c42','#42c02e','#007bff','#8b5cf6','#ec4899','#ef4444','#06b6d4','#6b7280'];
@@ -508,6 +514,7 @@ function runWithLibrary(action) {
   }
 }
 $('#btn-play').addEventListener('click', () => {
+  cancelDial(false);
   if (state.mode === 'stream') {
     if (state.playing) { audio.pause(); state.playing = false; }
     else { audio.play().catch(() => {}); state.playing = true; }
@@ -517,8 +524,8 @@ $('#btn-play').addEventListener('click', () => {
   if (state.playing) { audio.pause(); state.playing = false; }
   else { audio.play(); state.playing = true; }
 });
-$('#btn-next').addEventListener('click', () => runWithLibrary(playRandom));
-$('#btn-prev').addEventListener('click', () => runWithLibrary(playRandom));
+$('#btn-next').addEventListener('click', () => { cancelDial(false); runWithLibrary(playRandom); });
+$('#btn-prev').addEventListener('click', () => { cancelDial(false); runWithLibrary(playRandom); });
 $('#btn-heart').addEventListener('click', () => {
   if (!state.current) return;
   state.current.fav = !state.current.fav;
@@ -691,10 +698,17 @@ function setKeySmall(btn, text, visible = true) {
   el.style.display = visible ? '' : 'none';
 }
 
-// * / 0 / # 三个键：绑定了流就显示流名，否则恢复占位样式
+// * / 0 / # 三个键：绑定了流就显示流名，否则恢复占位样式（# 为点歌键）
 function refreshStreamKeys() {
   document.querySelectorAll('.key[data-key]').forEach(k => {
     const key = k.dataset.key;
+    if (key === '#') {
+      k.classList.remove('streaming');
+      k.removeAttribute('title');
+      k.setAttribute('aria-label', '井号键：按序号点歌，再按一次确认');
+      setKeySmall(k, '点歌');
+      return;
+    }
     const s = state.streams[key];
     k.classList.toggle('streaming', !!s);
     if (s) {
@@ -742,6 +756,14 @@ function refreshChannels() {
     const dashCh = $('#dash-ch');
     if (dashCh) dashCh.textContent = '1';
   }
+
+  // 常驻显示已导入数量与可选序号范围
+  const libCount = $('#lib-count');
+  if (libCount) {
+    libCount.textContent = state.tracks.length
+      ? `已导入 ${state.tracks.length} 首 · 选号 ${state.tracks.length >= 3 ? `3–${state.tracks.length}` : '不可用（需 3 首以上）'}`
+      : '尚未导入曲目';
+  }
 }
 
 function activateChannel(btn, ch) {
@@ -786,9 +808,115 @@ function playStream(key, stream) {
   $('#led').textContent = `网络串流 · ${stream.name}`;
 }
 
+// ============ 按序号点歌（# → 数字 → #）============
+// 序号 1 起算、按导入顺序；1（随机）/ 2（红心）恒不可选，有效范围 3 ~ tracks.length
+function dialRangeText() {
+  return state.tracks.length >= 3 ? `3–${state.tracks.length}` : '暂无可用序号';
+}
+
+function renderDash() {
+  const dashCh = $('#dash-ch');
+  if (!dashCh) return;
+  dashCh.textContent = state.mode === 'stream' ? String(state.streamKey) : String(state.ch);
+}
+
+function renderDial() {
+  const dashCh = $('#dash-ch');
+  if (dashCh) dashCh.textContent = dial.buf ? `#${dial.buf}` : '#';
+  const hashKey = getKeyButton('#');
+  if (hashKey) hashKey.classList.add('dialing');
+}
+
+function armDialTimer() {
+  if (dial.timer) clearTimeout(dial.timer);
+  dial.timer = setTimeout(() => cancelDial(false), DIAL_TIMEOUT);
+}
+
+function cancelDial(silent = true) {
+  if (!dial.active) return;
+  dial.active = false;
+  dial.buf = '';
+  if (dial.timer) { clearTimeout(dial.timer); dial.timer = 0; }
+  const hashKey = getKeyButton('#');
+  if (hashKey) hashKey.classList.remove('dialing');
+  renderDash();
+  if (!silent) $('#led').textContent = '已取消选号';
+}
+
+function startDial() {
+  if (dial.active) return;
+  if (state.tracks.length < 3) {
+    $('#led').textContent = '曲目不足 3 首 · 无法按序号点歌';
+    return;
+  }
+  dial.active = true;
+  dial.buf = '';
+  renderDial();
+  $('#led').textContent = `选号：输入 ${dialRangeText()} 后按 #`;
+  armDialTimer();
+}
+
+function dialDigit(d) {
+  if (!dial.active) return;
+  if (dial.buf.length >= MAX_DIAL_DIGITS) return;
+  if (dial.buf === '' && d === '0') return;   // 序号不以 0 开头
+  dial.buf += d;
+  renderDial();
+  $('#led').textContent = `选号：#${dial.buf} · 按 # 确认`;
+  armDialTimer();
+}
+
+function jumpToTrack(n) {
+  const t = state.tracks[n - 1];
+  if (!t) return;
+  cancelDial(true);
+  const wanted = t.fileName || t.name;
+
+  const play = target => {
+    if (!target || !target.file) { $('#led').textContent = '目标曲目不可用'; return; }
+    playTrack(target);
+    $('#track-sub').textContent = `第 ${n} 首`;
+    $('#led').textContent = `跳转到第 ${n} 首 · ${target.name}`;
+  };
+
+  if (t.file) { play(t); return; }
+  // 授权失效时先恢复文件夹，再按文件名找回目标曲目
+  ensurePlayable().then(ok => {
+    if (!ok) return;
+    const target = state.tracks.find(x => (x.fileName || x.name) === wanted) || state.tracks[n - 1];
+    play(target);
+  });
+}
+
+function confirmDial() {
+  if (!dial.active) return;
+  if (!dial.buf) {
+    $('#led').textContent = `请先输入序号（${dialRangeText()}）`;
+    armDialTimer();
+    return;
+  }
+  const n = parseInt(dial.buf, 10);
+  if (!Number.isFinite(n) || n < 3 || n > state.tracks.length) {
+    $('#led').textContent = `序号无效 · 请输入 ${dialRangeText()}`;
+    dial.buf = '';
+    renderDial();
+    armDialTimer();
+    return;
+  }
+  jumpToTrack(n);
+}
+
+function handleHashKey() {
+  if (dial.active) confirmDial();
+  else startDial();
+}
+
 document.querySelectorAll('.key[data-ch]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.ch;
+    // 选号态下 1-9 作为数字位（不切频道）
+    if (dial.active) { dialDigit(key); return; }
+
     const stream = state.streams[key];
     if (stream) { playStream(key, stream); return; }
 
@@ -801,10 +929,15 @@ document.querySelectorAll('.key[data-ch]').forEach(btn => {
   });
 });
 
-// 数字键盘 * / 0 / #：绑定了网络串流则播放，否则仍为占位键
+// 数字键盘 * / 0 / #：# 为点歌键；选号态下 * 取消、0 作为数字位
 document.querySelectorAll('.key[data-key]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.key;
+    if (key === '#') { handleHashKey(); return; }
+    if (dial.active) {
+      if (key === '*') { cancelDial(false); return; }
+      if (key === '0') { dialDigit('0'); return; }
+    }
     const stream = state.streams[key];
     if (stream) { playStream(key, stream); return; }
     $('#led').textContent = `${key} 键暂未开放`;

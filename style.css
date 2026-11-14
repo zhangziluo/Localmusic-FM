@@ -269,6 +269,14 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
   font-size: 12px;
   color: var(--muted);
 }
+.lib-count {
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: .04em;
+  margin: -6px 0 12px;
+}
 
 /* ============ 进度条 ============ */
 .progress-wrap {
@@ -459,6 +467,14 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
 .key.locked:hover { border-color: var(--line); }
 .key.streaming { border-color: var(--accent); }
 .key.streaming small { color: var(--accent); font-weight: 600; }
+
+/* 选号态：# 键呼吸提示 */
+.key.dialing {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: key-dial 1s steps(2, start) infinite;
+}
+@keyframes key-dial { 50% { opacity: 0.4; } }
 .key.streaming.active small { color: var(--bg); opacity: 0.75; }
 
 /* ============ 主题色圆点 ============ */
