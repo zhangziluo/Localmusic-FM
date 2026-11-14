@@ -18,15 +18,19 @@
 | v7 整点报时（未提交） | 播放中整点：12 小时制哔声（Web Audio）+ 系统 TTS 报时，时区推断地点，暂停后自动恢复 | ✅ |
 | v8 导出 + 录制（未提交） | 本地曲目播放记录（`fm_history`，2000 条）按时间范围导出 `.m3u`；音乐推子下方 ⏺️ 录制本地 / 串流，跨域无 CORS 时禁用 | ✅ |
 | v9 网页跳转（未提交） | `*` → 数字（`0`–`999999`）→ `*` 在新窗口打开绑定网址；内置 22 条默认；`fm_webjumps` 最多 1000 条；`*` 移出网络串流键位 | ✅ |
+| v10 剪贴板识别串流（未提交） | 复制典型串流地址后粘贴 / 窗口聚焦即提示「检测到串流地址」，预填名称与空闲按键，一键绑定；设置可关闭；忽略的地址本次会话不再提示 | ✅ |
+| v11 导入进度条（未提交） | 授权后顶部浮层显示扫描 / 读取进度与「成功 X / 总数 N」；6 路并发读取、坏文件跳过；恢复曲库与回退路径复用同一进度 | ✅ |
 
 ## 当前实现清单
 
-- 曲库：递归扫描、覆盖/追加导入、索引持久化、文件夹句柄自动恢复（Chromium）
+- 曲库：递归扫描、覆盖/追加导入、索引持久化、文件夹句柄自动恢复（Chromium）；导入 / 恢复时顶部显示进度（扫描「已找到 N 首」→ 读取「成功 X / 总数 N」），6 路并发读句柄
+- 导入进度：`#import-progress` 固定顶部浮层；`setImportProgress()` 合并到 rAF 渲染，`flushImportProgress()` 收尾同步刷新，`hideImportProgress()` 延迟收起；失败文件只跳过
 - 播放：随机、收藏频道 CH2、CH3-9（>15 首解锁）、上一首/下一首随机
 - 网络串流：实体键 `STREAM_KEYS = 3-9 0` 一键一流；另可绑定编号 `10`–`9999`，通过 `#` 选号播放；直播流进度条 100%，删除后停止
 - 串流编号：`parseStreamKey()` 校验 / 归一化，`loadStreams()` 最多读取 1000 条；设置面板文本框输入 + 用量显示（`N / 1000`），重复 / 非法编号拒绝
 - 按序号点歌：`#` 进入 → 多位数字 → `#` 确认；先匹配串流编号，未命中再按曲目序号；`1`/`2` 与越界拒绝，`*`/传输键/5 秒超时取消；授权失效时先恢复再跳转
 - 网页跳转：`*` 进入 → 多位数字（`0`–`999999`）→ `*` 确认；`fm_webjumps` 保存编号 → 网址（内置 22 条：电台站点 + `110`/`119`/`12345` 等公共服务，最多 1000 条）；数码屏 `↗编号` 闪烁，`*` 键呼吸提示
+- 剪贴板识别串流：`detectStreamUrl()` 按扩展名白名单 / 路径关键词 / Icecast 端口识别地址；文档 `paste` + 窗口 `focus` / `visibilitychange`（需已授权）触发；底部提示条 `.stream-detect` 可改名称 / 按键后「添加绑定」，绑定写入 `fm_streams` 并刷新键位；已绑定地址只更新 LED，忽略的地址本次会话不再提示；开关存 `fm_config.clipboardStream`
 - 整点报时：播放中整点触发，`updateClock()` 每秒检查；12 小时制哔声 + 系统 TTS「现在是〔地点〕时间〔时段〕〔中文小时〕点整」；地点按设备时区推断；报时暂停播放、结束恢复；同小时去重
 - 播放记录：`recordPlay()` 在每次 `playTrack()` 时写入 `fm_history`（`{ name, fileName, path, ts }`，最多 2000 条）
 - 导出：设置面板「导出播放记录」支持今天 / 昨天 / 近 7 天 / 自定义起止，生成 `fm-YYYYMMDD-HHMMSS.m3u`（仅本地曲目）
@@ -35,9 +39,38 @@
 - 主题：dark / led / crt / cream / tube + 主题色圆点 + meta theme-color
 - 底噪：粉红噪声 + 海浪混合，仅播放时出现
 - 数据卡片：实时时钟、CH（串流时显示键位）、累计时长（9999:59:59 归零 + 0.2s 重启动画）
-- PWA：SW 离线缓存 fm-pwa-v20、manifest、安装
-- 设置面板：主题色 / 界面主题 / 底噪 / 口播间隔 / 网络串流 / 网页跳转 / 导出播放记录 / 完成
+- PWA：SW 离线缓存 fm-pwa-v23、manifest、安装
+- 设置面板：主题色 / 界面主题 / 底噪 / 口播间隔 / 剪贴板识别串流 / 网络串流 / 网页跳转 / 导出播放记录 / 完成
 - 快捷键：Space、←、→、0-9、`*`、`#`（`#` 进入/确认选号，`*` 进入/确认网页跳转，选号态下 `*` 取消）
+
+## 最近一次变更（导入进度条）
+
+- 结构：`index.html` 在 `#app` 顶部新增 `#import-progress`（`hidden` + `.show` 滑入）；内部 `.ip-row`（`#ip-text` 文案 / `#ip-count` 计数）+ `.ip-track` / `#ip-fill` 进度条；不确定态由 `.ip-track.indeterminate` 的 `ip-slide` 动画表示
+- 控制：`showImportProgress(label)` 打开并清空旧计数 → `setImportProgress(patch)` 合并状态并调度一帧 rAF → `flushImportProgress()` 同步渲染 → `hideImportProgress(delay)` 延迟收起并复位；`renderImportProgress()` 在有总数时显示 `成功 X / 总数 N`（+ `· 失败 Y`），无总数时显示 `已找到 N 首`
+- 读取：`scanDirectory(dir, list, onFound)` 每发现音频回调一次；`tracksFromHandle(dir, onProgress)` 先扫描得总数，再 `mapWithLimit(handles, 6, ...)` 并发 `getFile()`（保持原顺序），失败只累加 `failed` 并跳过
+- 覆盖导入：扫描文案「正在扫描文件夹」→ 读取文案「正在导入曲目」→ 完成「导入完成」；LED 带失败数（`已导入 N 首 · Y 首失败`）；空目录提示「未找到可导入的音频文件」
+- 追加导入：读取文案「正在追加曲目」，LED `已追加 N 首`
+- 自动恢复：`restoreLibrary()` 显示「正在恢复曲库」→「恢复完成」，失败时立即收起
+- 回退路径（Safari / Firefox）：`#folder-input` 逐首建立曲目，每 100 首 `yieldToUI()` 一次并更新进度
+- 回归：新增 `/tmp/fmtest/test-import-progress.js`（30 条断言），其余 10 个脚本全部通过
+
+版本：
+- `style.css?v=13`、`app.js?v=15`、SW `fm-pwa-v23`
+
+## 最近一次变更（剪贴板串流识别）
+
+- 识别：`detectStreamUrl(text)` 取首个 `http(s)` 链接并去掉收尾标点；`STREAM_EXTS` 白名单命中即接受；页面 / 图片 / 压缩包等 `NON_STREAM_EXTS` 直接拒绝；否则按 `STREAM_HINTS`（`stream` / `live` / `radio` / `listen` / `icecast` / `shoutcast`）与 `STREAM_PORTS`（`8000` / `8001` / `8080` / `8443` / `9000`）兜底
+- 名称：`guessStreamName(url)` 用路径末段去扩展名、分隔符换空格，过短则回落域名
+- 触发：文档级 `paste`（输入控件 / `contenteditable` 内跳过）为主；`window.focus` / `visibilitychange` → `readClipboardOnFocus()`，仅在已授权且页面有用户操作后读取，连续失败两次本会话不再尝试
+- 弹窗：`showStreamDetectDialog(url)` 动态创建 `.stream-detect`，预填名称与 `allocateStreamKey()` 分配的空闲键；`Enter` 提交，`Esc` / `×` / 「忽略」写入会话级 `dismissedStreamUrls`
+- 提交：`parseStreamKey` 校验（保留键 / 占用 / 容量）→ 写 `state.streams` → `saveStreams()` → `refreshChannels()` + `refreshStreamKeys()` → LED `已绑定N 键 · 名称`；不自动播放
+- 已绑定地址：只把 LED 改成 `该串流已绑定到 N 键/号`，不重复弹窗；设置面板打开时不打扰
+- 设置：新增「剪贴板识别串流」下拉 `#s-clip`，保存到 `fm_config.clipboardStream`（默认开启）
+- 键位分配：抽出全局 `allocateStreamKey(map)`，设置面板 `nextFreeStreamKey()` 改为复用它
+- 回归：新增 `/tmp/fmtest/test-clipboard.js`（48 条断言），其余脚本全部通过
+
+版本：
+- `style.css?v=12`、`app.js?v=14`、SW `fm-pwa-v22`
 
 ## 最近一次变更（网页跳转）
 

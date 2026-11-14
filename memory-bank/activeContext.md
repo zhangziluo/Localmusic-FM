@@ -4,6 +4,10 @@
 
 ## 当前焦点
 
+**新增「导入进度条」**：手机端导入大文件夹时，选好文件夹并允许读取后，页面顶部滑出浮层进度条（固定定位，跟随主题色），扫描阶段显示「已找到 N 首」的不确定态流动条，读取阶段显示「成功 X / 总数 N」（有失败追加「· 失败 Y」）；完成后进度条自动收起，LED 同步提示 `已导入 N 首` / `已追加 N 首`。读取文件句柄改为 `mapWithLimit(handles, 6, ...)` 6 路并发（保持原顺序），单个 `getFile()` 失败只跳过该文件；进度渲染统一走 `requestAnimationFrame` 合并，收尾 `flushImportProgress()` 立即刷新一帧。自动恢复曲库与 Safari / Firefox 的回退路径（每 100 首让出主线程）复用同一套进度。
+
+**新增「剪贴板串流识别」**：用户在其他网站 / 客户端复制到典型串流地址后回到页面，底部会弹出「检测到串流地址」提示，自动填好名称与空闲按键，一键绑定（写入 `fm_streams` 并刷新键位小字）。入口：文档级 `paste`（`Ctrl/Cmd+V`；输入框 / `contenteditable` 内跳过）为主，窗口 `focus` / `visibilitychange` 时在浏览器已授权 `clipboard-read` 且页面已被操作过的前提下静默读取，连续失败两次即停止（之后授权会重置）。`detectStreamUrl()` 按「扩展名白名单 → 路径关键词 / Icecast 端口 → 否则拒绝」判定；已绑定地址只更新 LED，不重复弹窗；点「忽略 / × / Esc」的地址本次会话不再提示。设置面板新增「剪贴板识别串流」开关（`fm_config.clipboardStream`，默认开启）。
+
 **新增「网页跳转」**：先按 `*` 进入跳转态，输入 `0`–`999999` 编号，再按 `*` 用 `window.open(url, '_blank', 'noopener,noreferrer')` 打开该编号绑定的网址。内置 **22** 条默认：电台站点 `1`/`2`/`3` + `110`/`119`/`120`/`122`/`114`/`12117`/`12121`/`12122`/`12123`/`12306`/`12315`/`12320`/`12333`/`12345`/`10000`/`10010`/`10086`/`95598`/`163`（`911`/`999`/`404` 无官网地址，未内置）。设置面板可增删改（`fm_webjumps`，最多 1000 条）。数码屏显示 `↗编号` 并闪烁，`*` 键呼吸提示。`*` 已从网络串流键位移除，旧 `*` 串流绑定会被 `loadStreams()` 丢弃。
 
 **新增「播放记录导出」**：每次播放本地曲目都会写入 `fm_history`（最多 2000 条），设置面板底部可按「今天 / 昨天 / 近 7 天」或自定义起止时间，把该时段的曲目导出为 `fm-YYYYMMDD-HHMMSS.m3u`。
@@ -17,6 +21,7 @@
 - **按序号点歌 / 选台**：`#` → 数字（可多位）→ `#`；优先匹配串流编号，否则点歌 `3`–曲目总数（`1` 随机 / `2` 红心不可选）
 - **网页跳转**：`*` → 数字（`0`–`999999`）→ `*`；打开该编号绑定的网址，内置 22 条（`1`–`3` 电台站点 + `110` / `119` / `12345` 等公共服务）
 - **设置 → 网络串流 → ＋ 添加**：可绑定实体键 `3`–`9`、`0`，或编号 `3`–`9999`（实际开放 `10`+，最多 1000 条；`#` / `*` 不可绑定）
+- **剪贴板识别串流**：复制地址后按 `Ctrl/Cmd+V`（或窗口重新聚焦且已授权）→ 底部提示「检测到串流地址」→ 确认名称 / 按键 → 添加绑定
 - **设置 → 网页跳转 → ＋ 添加**：编号 `0`–`999999` → 网址，最多 1000 条
 - 编号 > 9 没有实体键，只能通过 `#` 选号触发；实体键仍直接点击播放
 - 直接按 `1` 随机 / `2` 红心；`3`–`9` 在曲库超过 15 首后解锁
@@ -29,10 +34,12 @@
 | --- | --- |
 | `app.js` | 网页跳转：`WEB_LINKS_KEY` / `MAX_WEB_NUM` / `MAX_WEB_LINKS` / `MAX_WEB_DIGITS` / `DEFAULT_WEB_LINKS` / `web` / `parseWebKey` / `loadWebLinks` / `saveWebLinks` / `renderWeb` / `startWebJump` / `webDigit` / `confirmWebJump` / `cancelWebJump` / `handleStarKey` / `flashDashLabel` / `openWebLink`；`STREAM_KEYS` 移除 `*`；设置面板新增网页跳转区块 |
 | `app.js` | 播放记录：`HISTORY_KEY` / `MAX_HISTORY` / `loadHistory` / `saveHistory` / `recordPlay` / `presetRange` / `buildM3u` / `exportHistory` / `toLocalInputValue` / `parseLocalInputValue`；录制：`canRecordUrl` / `refreshRecordButton` / `startRecording` / `stopRecording` / `finalizeRecording` / `cleanupRecording`；`playTrack` 写记录并在切歌 / 切流时收尾录制；设置面板新增导出区块 |
-| `style.css` | 新增 `.key.webjump` 呼吸、`.dash-link` 脉冲、`.dash-link-flash` 闪动；`.rec-btn` / `.rec-dot` / `recPulse`、`.export-box` / `.export-presets` / `.export-field` |
-| `index.html` | 音乐推子下新增 `#btn-record`；`*` 键 aria-label 改为网页跳转；`style.css?v=11`、`app.js?v=12` |
-| `sw.js` | `fm-pwa-v20` + ASSETS 版本同步 |
-| `README.md` | 导出播放记录、录制、CORS / 格式 / 相对路径限制、版本号同步 |
+| `style.css` | 新增 `.key.webjump` 呼吸、`.dash-link` 脉冲、`.dash-link-flash` 闪动；`.rec-btn` / `.rec-dot` / `recPulse`、`.export-box` / `.export-presets` / `.export-field`；剪贴板提示条 `.stream-detect` / `.sd-*`；导入进度浮层 `.import-progress` / `.ip-*`（含 `ip-slide` 不确定态动画） |
+| `index.html` | 音乐推子下新增 `#btn-record`；`*` 键 aria-label 改为网页跳转；`#app` 顶部新增 `#import-progress` 进度浮层；`style.css?v=13`、`app.js?v=15` |
+| `sw.js` | `fm-pwa-v23` + ASSETS 版本同步 |
+| `app.js` | 导入进度：`IMPORT_READ_CONCURRENCY` / `ipState` / `ipNodes` / `renderImportProgress` / `scheduleImportProgress` / `flushImportProgress` / `setImportProgress` / `showImportProgress` / `hideImportProgress` / `yieldToUI` / `mapWithLimit`；`scanDirectory(dir, list, onFound)`、`tracksFromHandle(dir, onProgress)`；`handleImport` / `restoreLibrary` / `#folder-input` 回退路径接入进度 |
+| `app.js` | 剪贴板串流：`STREAM_URL_RE` / `STREAM_EXTS` / `NON_STREAM_EXTS` / `STREAM_HINTS` / `STREAM_PORTS` / `dismissedStreamUrls` / `detectStreamUrl` / `guessStreamName` / `showStreamDetectDialog` / `maybeOfferStream` / `readClipboardOnFocus` / `allocateStreamKey`；文档 `paste` + `window.focus` / `visibilitychange` 监听；设置面板新增「剪贴板识别串流」 |
+| `README.md` | 导出播放记录、录制、剪贴板串流识别（触发方式 / 判定规则 / 权限限制）、版本号同步 |
 | `memory-bank/` | 同步本次改动 |
 
 ## 关键行为约定（改动时别破坏）
@@ -57,12 +64,17 @@
 18. 跨域串流只有同源或 CORS 允许时才可录制；`canRecordUrl()` 结果按 URL 缓存，`refreshRecordButton()` 用 token 防止异步结果覆盖新状态
 19. 录制输出格式由浏览器决定（webm / ogg / mp4），不做转码；停止时 `recorder.onstop` → `finalizeRecording()` 生成 Blob 并下载
 20. 内置网页跳转表变更时把 `WEB_SEED_VERSION` +1：老用户下次启动会补全缺失的内置编号；`DEFAULT_WEB_LINKS` / `WEB_LINK_NAMES` 一一对应，名称仅在网址未被改动时展示
+21. 剪贴板识别只在**非输入控件**上响应 `paste`（`input` / `textarea` / `select` / `contenteditable` 跳过）；设置面板打开时不弹提示（`.sheet-mask` 存在即返回）
+22. 已绑定地址（`state.streams` 里 URL 相同）不再弹窗，只把 LED 改成「该串流已绑定到 N 键/号」；「忽略 / × / Esc」写入会话级 `dismissedStreamUrls`，刷新页面后才会再次提示
+23. 窗口聚焦自动读取剪贴板必须容错：`clipboardReadFailures >= 2` 后本会话不再尝试，`permissions` 变为 `granted` 时清零重试；`navigator.userActivation.hasBeenActive === false` 时直接返回（避免一进页面就弹权限框）；绑定动作复用 `allocateStreamKey()`（与设置面板同一分配规则），成功后同时 `refreshChannels()` + `refreshStreamKeys()`
+24. 导入进度**不要**在每个文件回调里直接写 DOM：`setImportProgress()` 只更新 `ipState` 并调度一次 rAF；结束 / 空目录 / 恢复完成时调 `flushImportProgress()` 同步渲染一帧再 `hideImportProgress(delay)`；两条导入路径（目录选择 / 回退 input）与 `restoreLibrary()` 都必须显示进度
+25. `tracksFromHandle()` 用 `mapWithLimit(..., 6, ...)` 读取并**保持原顺序**（点歌序号依赖顺序）；单个 `getFile()` 失败只累加 `failed` 并返回 `null`，最后 `filter(Boolean)`，不要把整个导入判为失败
 
 ## 验证方式
 
 ```bash
 node --check app.js && node --check sw.js
-cd /tmp/fmtest && node test.js && node test-restore.js && node test-dial.js && node test-egg.js && node test-streams.js && node test-chime.js && node test-history.js && node test-record.js && node test-webjump.js
+cd /tmp/fmtest && node test.js && node test-restore.js && node test-dial.js && node test-egg.js && node test-streams.js && node test-chime.js && node test-history.js && node test-record.js && node test-webjump.js && node test-clipboard.js && node test-import-progress.js
 ```
 
 > `test-podcast.js` 是已移除播客功能时的旧脚本（依赖 `parseRss`），当前会报 `parseRss is not a function`，已废弃，不应再运行。
@@ -78,6 +90,8 @@ cd /tmp/fmtest && node test.js && node test-restore.js && node test-dial.js && n
 - `test-history.js` 覆盖 `recordPlay` 写入与 2000 条上限、预设区间、`datetime-local` 互转、M3U 内容、区间过滤 / 空区间、`loadHistory` 脏数据过滤，以及设置面板导出按钮的 DOM 接线
 - `test-record.js` 覆盖同源 / CORS 可录制判定与缓存、按钮禁用文案、本地 / 串流录制（`crossOrigin`）、停止后下载文件名、跨域拒绝开始。需桩 `MediaRecorder`、`AudioContext.createMediaStreamDestination`、`fetch`
 - `test-webjump.js` 覆盖默认映射、`parseWebKey` 校验、`*` 旧串流被丢弃、进入 / 多位编号 / 未绑定 / 单独 0 / 空输入、`window.open` 参数、与选号互斥、设置面板增删与校验、`loadWebLinks` 读取过滤
+- `test-clipboard.js` 覆盖 `detectStreamUrl` 的扩展名 / 关键词 / 端口判定与排除规则、`guessStreamName`、粘贴弹窗与预填、输入框内粘贴跳过、忽略后不再提示、添加绑定（持久化 / 键位小字 / LED）、已绑定地址只提示、按键校验（保留键 / 占用 / 空 / 前导 0）、Esc 关闭、设置开关、聚焦读取剪贴板（桩 `navigator.clipboard` / `permissions`）
+- `test-import-progress.js` 覆盖扫描阶段文案与「已找到 N 首」、读取阶段「成功 X / 总数 N · 失败 Y」、完成 100% 与 aria、自动隐藏、追加去重、空目录提示、回退 input 路径（250 首）、`mapWithLimit` 保持顺序、`tracksFromHandle` 回调契约与坏文件跳过。需桩 `indexedDB`（`initDB` / `saveDirHandle`）与 `URL.createObjectURL`
 
 ## 待用户确认
 
@@ -89,8 +103,9 @@ cd /tmp/fmtest && node test.js && node test-restore.js && node test-dial.js && n
 2. 浏览器手测录制：本地曲目与同源串流各录一段，确认有声音；再试一个无 CORS 的跨域流，确认按钮置灰
 3. 在 Chrome / Safari 分别确认录音格式（webm / mp4）与下载行为
 4. 浏览器手测编号选台、点歌、网页跳转（`*` → 编号 → `*`）、整点报时（详见上一轮）
-5. 提交本轮改动（导出 + 录制；`memory-bank/` 仍未跟踪）
-6. 视需要补 `.gitignore`（`.venv/`、`.DS_Store`、`*.bak`）
+5. 浏览器手测剪贴板识别：复制一个 `.m3u8` / `.mp3` 直链 → 回页面 `Ctrl/Cmd+V` → 确认弹窗预填与「添加绑定」；再试设置开关关闭、已绑定地址、输入框内粘贴
+6. 提交本轮改动（剪贴板识别；`memory-bank/` 仍未跟踪）
+7. 视需要补 `.gitignore`（`.venv/`、`.DS_Store`、`*.bak`）
 
 ## 快速排查
 
@@ -112,4 +127,6 @@ cd /tmp/fmtest && node test.js && node test-restore.js && node test-dial.js && n
 | ⏺️ 按钮置灰 | 是否正在播放；串流是否跨域且无 CORS；浏览器是否支持 `MediaRecorder`（iOS 有限） |
 | 录到的文件没声音 | 串流虽能播放但无 CORS 时录音必为静音；确认 `canRecordUrl()` 返回 true |
 | 录音没有下载 | 是否点了停止；`recorder.onstop` 是否触发；`Blob` 是否为空（重试录制） |
+| 粘贴串流地址没弹提示 | 焦点是否在输入框 / `contenteditable` 内；地址是否命中扩展名 / 关键词 / 端口规则；设置 → 剪贴板识别串流是否开启；该地址是否已绑定（只看 LED）或本次已被忽略 |
+| 窗口聚焦没自动读取剪贴板 | 浏览器是否授予 `clipboard-read`（Safari / Firefox 通常不支持）；读取一旦失败本会话不再尝试，可改用 `Ctrl/Cmd+V` |
 

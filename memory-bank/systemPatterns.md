@@ -7,7 +7,7 @@
 ```
 IndexedDB helpers → 常量（STREAM_KEYS / HISTORY_KEY / WEB_LINKS_KEY）→ state + history + dial + web + 报时态 + 录制态
 → 主题 → init(IIFE) → 时钟/时长（含整点报时）→ 音频/底噪 → 播放记录 → 曲库播放 → 录制 → 推子 → 控制栏 → 导入/恢复
-→ 频道+网络串流 → 按序号点歌 → 网页跳转 → 设置面板 → 键盘 → SW 注册
+→ 频道+网络串流 → 剪贴板串流识别 → 按序号点歌 → 网页跳转 → 设置面板 → 键盘 → 剪贴板事件 → SW 注册
 ```
 
 ## 核心状态 `state`
@@ -24,6 +24,7 @@ IndexedDB helpers → 常量（STREAM_KEYS / HISTORY_KEY / WEB_LINKS_KEY）→ s
   streamKey: null,      // 当前播放流绑定的键位
   webLinks: {},         // 网页跳转编号 → URL（'*' 前缀触发），持久化到 fm_webjumps
   history: [],          // [{ name, fileName, path, ts }]，最多 2000 条，持久化到 fm_history
+  clipboardStream: true, // 剪贴板识别串流开关，持久化到 fm_config
 }
 ```
 
@@ -82,7 +83,18 @@ const MAX_WEB_LINKS = 1000;
 - `hasNumericStreams()` 用于允许「曲库不足 3 首但已绑定编号串流」的用户进入选号态；`dialHintText()` 组合提示文案
 - 排序统一用 `sortStreamKeys()`：数字编号升序，然后 `0`（`*` 已不再作为串流键）
 
-## 按序号点歌（`#` → 数字 → `#`）
+## 剪贴板串流识别（复制 → 提示绑定）
+
+- 常量：`STREAM_URL_RE`（首个 `http(s)` 链接）、`STREAM_EXTS`（`mp3` / `m3u` / `m3u8` / `pls` / `aac` / `ogg` / `oga` / `opus` / `flac` / `wav` / `m4a` / `mp4` / `webm` / `ts` / `mpd`）、`NON_STREAM_EXTS`（页面 / 图片 / 压缩包等直接排除）、`STREAM_HINTS`（`stream` / `live` / `radio` / `listen` / `icecast` / `shoutcast` / `playlist`）、`STREAM_PORTS`（`8000` / `8001` / `8080` / `8443` / `9000`）
+- `detectStreamUrl(text)`：匹配首个链接 → 去掉收尾标点 → `new URL()` 解析 → 校验 `http(s)` → 扩展名白名单命中返回；非黑名单但路径关键词 / 端口命中也可；否则 `null`
+- `guessStreamName(url)`：取路径末段去扩展名、`-` / `_` / `+` 换空格；不足 2 字符回落 `hostname`（去 `www.`）
+- 触发：文档级 `paste`（目标为 `input` / `textarea` / `select` / `contenteditable` 时跳过）；`window.focus` 与 `visibilitychange` → `readClipboardOnFocus()`，仅在权限非 `denied` 且页面已有用户操作时读取，连续失败两次即本会话不再尝试（`granted` 时清零）
+- `maybeOfferStream(text)`：开关关闭 / 已忽略 / 设置面板打开时直接返回；地址已存在于 `state.streams` 时只更新 LED；否则 `showStreamDetectDialog(url)`
+- 弹窗 `.stream-detect` 由 JS 动态创建在 `body` 末尾（不写进 `index.html`）：名称 / 按键预填（`allocateStreamKey()`），`Enter` 提交、`Esc` / `×` / 「忽略」写入 `dismissedStreamUrls`
+- 提交：`parseStreamKey` 校验 → 拒绝占用 / 超过 `MAX_STREAMS` → 写 `state.streams` → `saveStreams()` → `refreshChannels()` + `refreshStreamKeys()` → LED 提示；不自动播放
+- 开关 `state.clipboardStream`（默认 `true`）由设置面板 `#s-clip` 维护，随 `saveConfig()` 写入 `fm_config`
+
+
 
 - 状态机：`startDial()` 置 `active`、清 `buf`、`renderDial()` 并在 `#` 键上加 `.dialing`；`dialDigit(d)` 追加数字并重置 5 秒计时；`confirmDial()` 优先查串流编号，否则 `jumpToTrack(n)`；`cancelDial()` 清空并 `renderDash()`
 - 序号：1 起算、按 `state.tracks` 顺序，`N = state.tracks[N-1]`；有效范围 `3 ≤ N ≤ tracks.length`（`1` 随机 / `2` 红心保留）
@@ -91,6 +103,17 @@ const MAX_WEB_LINKS = 1000;
 - 取消：再按 `#` 确认、`*`、播放 / 切歌键，或 `DIAL_TIMEOUT` 超时
 - 跳转：目标曲目无 `file`（授权失效）时先 `ensurePlayable()` 重新扫描，再按 `fileName/name` 找回目标播放
 - 常驻计数：`#lib-count` 在 `refreshChannels()` 中刷新「已导入 N 首 · 选号 3–N」
+
+## 导入进度（顶部浮层）
+
+- DOM：`#import-progress`（`hidden` + `.show`）内含 `#ip-text` / `#ip-count` / `#ip-track` / `#ip-fill`；固定定位在页面顶部，`width: min(420px, 100%)`，配色用 `--panel` / `--panel-ink` / `--accent`，自动跟随整页主题
+- 状态：模块级 `ipState = { label, ok, total, failed, found }`；`total > 0` 时按 `ok + failed` 计算百分比，`total === 0` 时进入不确定态（`已找到 N 首`）
+- 渲染节流：`setImportProgress()` 不直接写 DOM，只合并状态并 `requestAnimationFrame` 调度一次；`flushImportProgress()` 在结束 / 空目录 / 恢复完成时取消待执行帧并同步渲染，防止后台标签页 rAF 被节流导致进度停在旧值
+- 打开 / 收起：`showImportProgress(label)` 会清空上一次的计数与宽度并加 `.show`；`hideImportProgress(delay)` 默认 800ms 后移除 `.show`、设置 `hidden`、宽度归零，`ipState = null`
+- 数据来源：`scanDirectory(dir, list, onFound)` 递归时回调发现数；`tracksFromHandle(dir, onProgress)` 推送 `{ phase:'scan', found }` 与 `{ phase:'read', ok, failed, total }`
+- 并发：`mapWithLimit(items, limit, fn)` 保持结果顺序（点歌序号依赖 `state.tracks` 顺序），读取句柄用 `IMPORT_READ_CONCURRENCY = 6`；手机端逐个 `getFile()` 往返是主要瓶颈
+- 容错：单个文件 `getFile()` 失败只计入 `failed`，返回 `null` 后 `filter(Boolean)`，不中断整次导入
+- 回退路径：`<input webkitdirectory>` 分支逐首建立曲目，每 100 首 `await yieldToUI()` 让出主线程并刷新进度
 
 ## 网页跳转（`*` → 数字 → `*`）
 
@@ -127,6 +150,7 @@ const MAX_WEB_LINKS = 1000;
 - 网页跳转用**临时副本 `webDraft`**：增删只改副本，点「完成」才 `state.webLinks = webDraft; saveWebLinks()`；编号 / 网址用文本框输入（`parseWebKey` 校验，留空自动分配 `nextFreeWebKey()`）
 - 标题右侧 `#s-stream-cap` 显示 `N / 1000`，达到上限后「＋ 添加」禁用
 - 网页跳转区块与串流区块结构一致，标题右侧 `#s-web-cap` 显示网页跳转用量
+- 「剪贴板识别串流」下拉框 `#s-clip` 直接改 `state.clipboardStream`（点「完成」时随 `saveConfig()` 持久化）
 - 点遮罩 = 取消（主题回滚，串流改动全部丢弃）
 - 删除正在播放的串流：点「完成」后停止播放、清 `mode` 并回到 CH1
 

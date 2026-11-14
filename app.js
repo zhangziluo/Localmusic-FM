@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-console.log('极简FM · app.js?v=13 已加载');
+console.log('极简FM · app.js?v=15 已加载');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -75,6 +75,14 @@ function parseStreamKey(raw) {
   return String(n);
 }
 
+// 分配串流按键：优先空闲实体键，其次从 10 起找最小空闲编号
+function allocateStreamKey(map) {
+  const used = map || state.streams;
+  for (const k of STREAM_KEYS) if (!used[k]) return k;
+  for (let n = 10; n <= MAX_STREAM_NUM; n++) if (!used[String(n)]) return String(n);
+  return '';
+}
+
 // 数字编号（可通过 # 选号触发）与实体键分开排序
 function isNumericStreamKey(key) {
   return /^\d+$/.test(key) && +key > 9;
@@ -117,6 +125,7 @@ const state = {
   streams: {}, mode: 'local', streamKey: null,
   webLinks: {},         // 网页跳转编号 → URL 映射（* 前缀触发）
   history: [],          // 本地曲目播放记录（含时间戳），用于导出 .m3u
+  clipboardStream: true, // 复制到串流地址时提示添加绑定
 };
 
 // ============ 播放记录（导出 .m3u 用） ============
@@ -397,6 +406,7 @@ function applyTheme(resetAccent = false) {
   state.voiceInterval = cfg.voiceInterval || 0;
   state.accent = cfg.accent || '#ff8c42';
   state.cardStyle = cfg.cardStyle || 'dark';
+  state.clipboardStream = cfg.clipboardStream !== false;
   const favs = JSON.parse(localStorage.getItem('fm_favs') || '[]');
   state.favorites = new Set(favs);
   state.streams = loadStreams();
@@ -862,6 +872,7 @@ function saveConfig() {
     noiseVolume: state.noiseVolume, musicVolume: state.musicVolume,
     voiceInterval: state.voiceInterval,
     accent: state.accent, cardStyle: state.cardStyle,
+    clipboardStream: state.clipboardStream,
   }));
 }
 function commitPlayTime(stop = true) {
@@ -943,6 +954,106 @@ $('#btn-heart').addEventListener('click', () => {
   localStorage.setItem('fm_favs', JSON.stringify([...state.favorites]));
 });
 
+// ============ 导入进度 ============
+// 手机端导入大文件夹时逐个读句柄较慢：顶部浮层显示进度与「成功 / 总数」
+// 渲染统一走 rAF 合并，避免每读一个文件就写一次 DOM 拖慢主线程
+const IMPORT_READ_CONCURRENCY = 6;
+let ipState = null;
+let ipRaf = 0;
+let ipHideTimer = 0;
+
+const rafFn = cb => (typeof window.requestAnimationFrame === 'function'
+  ? window.requestAnimationFrame(cb)
+  : setTimeout(cb, 16));
+const yieldToUI = () => new Promise(r => setTimeout(r, 0));
+
+function ipNodes() {
+  return {
+    box: document.getElementById('import-progress'),
+    text: document.getElementById('ip-text'),
+    count: document.getElementById('ip-count'),
+    track: document.getElementById('ip-track'),
+    fill: document.getElementById('ip-fill'),
+  };
+}
+
+function renderImportProgress() {
+  ipRaf = 0;
+  const s = ipState, n = ipNodes();
+  if (!s || !n.box) return;
+  n.text.textContent = s.label;
+  if (s.total > 0) {
+    const done = Math.min(s.total, s.ok + s.failed);
+    const pct = Math.round(done / s.total * 100);
+    n.fill.style.width = pct + '%';
+    n.count.textContent = `成功 ${s.ok} / ${s.total}` + (s.failed ? ` · 失败 ${s.failed}` : '');
+    n.track.classList.remove('indeterminate');
+    n.track.setAttribute('aria-valuenow', String(pct));
+  } else {
+    n.fill.style.width = '0%';
+    n.count.textContent = s.found ? `已找到 ${s.found} 首` : '';
+    n.track.classList.add('indeterminate');
+    n.track.setAttribute('aria-valuenow', '0');
+  }
+}
+
+function scheduleImportProgress() {
+  if (!ipRaf) ipRaf = rafFn(renderImportProgress);
+}
+
+// 结束 / 收尾时立即渲染一帧，避免后台标签页 rAF 被节流导致进度停在旧值
+function flushImportProgress() {
+  if (ipRaf) {
+    if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(ipRaf);
+    ipRaf = 0;
+  }
+  renderImportProgress();
+}
+
+function setImportProgress(patch) {
+  ipState = Object.assign({ label: '正在导入', ok: 0, total: 0, failed: 0, found: 0 }, ipState || {}, patch);
+  scheduleImportProgress();
+}
+
+function showImportProgress(label) {
+  clearTimeout(ipHideTimer);
+  ipState = { label, ok: 0, total: 0, failed: 0, found: 0 };
+  const n = ipNodes();
+  if (n.box) {
+    n.box.hidden = false;
+    n.box.setAttribute('aria-hidden', 'false');
+    void n.box.offsetWidth;   // 强制回流，保证滑入动画生效
+    n.box.classList.add('show');
+  }
+  // 先清掉上一次的计数与进度，避免新任务开始时短暂显示旧数字
+  if (n.text) n.text.textContent = label;
+  if (n.count) n.count.textContent = '';
+  if (n.fill) n.fill.style.width = '0%';
+  if (n.track) {
+    n.track.classList.add('indeterminate');
+    n.track.setAttribute('aria-valuenow', '0');
+  }
+  scheduleImportProgress();
+}
+
+function hideImportProgress(delay) {
+  clearTimeout(ipHideTimer);
+  ipHideTimer = setTimeout(() => {
+    const n = ipNodes();
+    if (n.box) {
+      n.box.classList.remove('show');
+      n.box.hidden = true;
+      n.box.setAttribute('aria-hidden', 'true');
+    }
+    if (n.track) {
+      n.track.classList.remove('indeterminate');
+      n.track.setAttribute('aria-valuenow', '0');
+    }
+    if (n.fill) n.fill.style.width = '0%';
+    ipState = null;
+  }, Math.max(0, delay == null ? 800 : delay));
+}
+
 // ============ 导入（覆盖 + 追加） ============
 async function handleImport(append) {
   if (!('showDirectoryPicker' in window)) {
@@ -959,7 +1070,17 @@ async function handleImport(append) {
   try {
     await saveDirHandle(handle);
     pendingDirHandle = handle;
-    const newTracks = await tracksFromHandle(handle);
+    showImportProgress('正在扫描文件夹');
+    let failedCount = 0;
+    const newTracks = await tracksFromHandle(handle, p => {
+      if (p.phase === 'scan') {
+        setImportProgress({ label: '正在扫描文件夹', found: p.found });
+      } else {
+        failedCount = p.failed;
+        setImportProgress({ label: append ? '正在追加曲目' : '正在导入曲目', ok: p.ok, total: p.total, failed: p.failed });
+      }
+    });
+    const totalRead = newTracks.length + failedCount;
 
     // 授权失效时只恢复了索引，此时追加也按覆盖处理，避免留下无法播放的旧条目
     if (!append || state.tracks.some(t => !t.file)) {
@@ -977,11 +1098,17 @@ async function handleImport(append) {
     }
 
     saveLibraryIndex();
-    $('#led').textContent = append ? `已追加 ${added} 首` : `已导入 ${state.tracks.length} 首`;
+    setImportProgress({ label: totalRead ? '导入完成' : '未找到可导入的音频文件', ok: newTracks.length, total: totalRead, failed: failedCount });
+    flushImportProgress();
+    $('#led').textContent = totalRead
+      ? (append ? `已追加 ${added} 首` : `已导入 ${state.tracks.length} 首`) + (failedCount ? ` · ${failedCount} 首失败` : '')
+      : '未找到可导入的音频文件';
     refreshChannels();
     if (!state.current && state.tracks.length) playTrack(pickNext());
+    hideImportProgress(totalRead ? 900 : 1600);
   } catch(e) {
     console.log('导入失败:', e);
+    hideImportProgress(0);
     $('#led').textContent = '导入失败 · 请重新选择文件夹';
   }
 }
@@ -989,49 +1116,99 @@ async function handleImport(append) {
 $('#btn-import').addEventListener('click', () => handleImport(false));
 $('#btn-append').addEventListener('click', () => handleImport(true));
 
-$('#folder-input').addEventListener('change', e => {
-  const files = [...e.target.files].filter(f => {
-    const ext = f.name.toLowerCase().split('.').pop();
-    return ['mp3','flac','wav','ogg','m4a','opus','aac'].includes(ext);
-  });
+$('#folder-input').addEventListener('change', async e => {
+  const exts = ['mp3','flac','wav','ogg','m4a','opus','aac'];
+  const all = [...e.target.files].filter(f => exts.includes(f.name.toLowerCase().split('.').pop()));
   pendingDirHandle = null;
-  state.tracks = files.map(f => ({
-    name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, file: f,
-    fav: isFavorite(f.name.replace(/\.[^.]+$/, ''), f.name), path: f.webkitRelativePath || '',
-  }));
+  if (!all.length) {
+    $('#led').textContent = '未找到可导入的音频文件';
+    return;
+  }
+  // 回退路径（Safari / Firefox）：分批建立曲目并让出主线程，避免大列表卡住页面
+  const total = all.length;
+  showImportProgress('正在导入曲目');
+  state.tracks = [];
   state.played = [];
+  for (let i = 0; i < total; i++) {
+    const f = all[i];
+    const name = f.name.replace(/\.[^.]+$/, '');
+    state.tracks.push({
+      name, fileName: f.name, file: f,
+      fav: isFavorite(name, f.name), path: f.webkitRelativePath || '',
+    });
+    if ((i + 1) % 100 === 0 || i + 1 === total) {
+      setImportProgress({ ok: i + 1, total });
+      if (i + 1 < total) await yieldToUI();
+    }
+  }
   saveLibraryIndex();
+  setImportProgress({ label: '导入完成', ok: total, total });
+  flushImportProgress();
   $('#led').textContent = `已导入 ${state.tracks.length} 首`;
   refreshChannels();
+  hideImportProgress(700);
 });
 
-async function scanDirectory(dir, list) {
+// 读取句柄时的并发上限：手机端逐个 getFile() 往返较慢，适度并发能明显提速，同时保留原顺序
+async function mapWithLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const run = async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  const workers = [];
+  for (let i = 0; i < Math.min(limit, items.length); i++) workers.push(run());
+  await Promise.all(workers);
+  return results;
+}
+
+async function scanDirectory(dir, list, onFound) {
   const exts = ['.mp3','.flac','.wav','.ogg','.m4a','.opus','.aac'];
   for await (const [name, handle] of dir.entries()) {
     if (handle.kind === 'file') {
       const lower = name.toLowerCase();
-      if (exts.some(e => lower.endsWith(e))) list.push(handle);
+      if (exts.some(e => lower.endsWith(e))) {
+        list.push(handle);
+        if (onFound) onFound(list.length);
+      }
     } else if (handle.kind === 'directory') {
-      await scanDirectory(handle, list);
+      await scanDirectory(handle, list, onFound);
     }
   }
 }
 
-async function tracksFromHandle(dir) {
+// onProgress: { phase:'scan', found } → { phase:'read', ok, failed, total }
+async function tracksFromHandle(dir, onProgress) {
   const handles = [];
-  await scanDirectory(dir, handles);
-  const tracks = [];
-  for (const handle of handles) {
-    const file = await handle.getFile();
-    tracks.push({
-      name: file.name.replace(/\.[^.]+$/, ''),
-      fileName: file.name,
-      file,
-      fav: isFavorite(file.name.replace(/\.[^.]+$/, ''), file.name),
-      path: '',
-    });
-  }
-  return tracks;
+  await scanDirectory(dir, handles, found => {
+    if (onProgress) onProgress({ phase: 'scan', found });
+  });
+  const total = handles.length;
+  let ok = 0, failed = 0;
+  if (onProgress) onProgress({ phase: 'read', ok, failed, total });
+  const tracks = await mapWithLimit(handles, IMPORT_READ_CONCURRENCY, async (handle) => {
+    try {
+      const file = await handle.getFile();
+      ok++;
+      return {
+        name: file.name.replace(/\.[^.]+$/, ''),
+        fileName: file.name,
+        file,
+        fav: isFavorite(file.name.replace(/\.[^.]+$/, ''), file.name),
+        path: '',
+      };
+    } catch (err) {
+      // 单个文件读取失败（权限 / 已被移走）不影响其余曲目
+      failed++;
+      return null;
+    } finally {
+      if (onProgress) onProgress({ phase: 'read', ok, failed, total });
+    }
+  });
+  return tracks.filter(Boolean);
 }
 
 let pendingDirHandle = null;
@@ -1054,17 +1231,25 @@ async function restoreLibrary(handle, requestPermission = false) {
         : '点击播放恢复上次曲库';
       return false;
     }
-    const tracks = await tracksFromHandle(handle);
+    showImportProgress('正在恢复曲库');
+    const tracks = await tracksFromHandle(handle, p => {
+      if (p.phase === 'scan') setImportProgress({ label: '正在扫描文件夹', found: p.found });
+      else setImportProgress({ label: '正在恢复曲库', ok: p.ok, total: p.total, failed: p.failed });
+    });
     state.tracks = tracks;
     state.played = [];
     pendingDirHandle = null;
     saveLibraryIndex();
     refreshChannels();
     refreshDuration();
+    setImportProgress({ label: '恢复完成', ok: tracks.length, total: tracks.length });
+    flushImportProgress();
     $('#led').textContent = `已自动恢复 ${tracks.length} 首`;
+    hideImportProgress(700);
     return true;
   } catch (e) {
     console.log('恢复失败:', e);
+    hideImportProgress(0);
     pendingDirHandle = handle;
     $('#led').textContent = '曲库恢复失败 · 请重新导入文件夹';
     return false;
@@ -1218,6 +1403,160 @@ function playStream(key, stream) {
   if (bar) bar.style.width = '100%';
   $('#led').textContent = `网络串流 · ${stream.name}`;
   refreshRecordButton();
+}
+
+// ============ 剪贴板串流识别 ============
+// 复制典型串流地址后回到页面（粘贴或窗口重新聚焦）→ 提示是否添加绑定
+const STREAM_URL_RE = /https?:\/\/[^\s"'<>`]+/i;
+const STREAM_EXTS = ['mp3', 'm3u', 'm3u8', 'pls', 'aac', 'ogg', 'oga', 'opus',
+  'flac', 'wav', 'm4a', 'mp4', 'webm', 'ts', 'mpd'];
+const NON_STREAM_EXTS = ['html', 'htm', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'svg',
+  'pdf', 'zip', 'rar', '7z', 'apk', 'dmg', 'exe', 'js', 'css', 'json', 'xml', 'txt',
+  'md', 'csv', 'ico', 'woff', 'woff2', 'ttf'];
+// Icecast / Shoutcast / 常见直播目录的路径关键词
+const STREAM_HINTS = /(?:^|[/_.;-])(stream|streams|live|radio|listen|icecast|shoutcast|playlist)(?:[/_.?&=-]|$)/i;
+const STREAM_PORTS = ['8000', '8001', '8080', '8443', '9000'];
+const dismissedStreamUrls = new Set();   // 本次会话里点过「忽略」的地址
+let lastClipboardText = '';
+let clipboardReadFailures = 0;
+
+// 从一段文本里挑出典型串流地址；不像串流则返回 null
+function detectStreamUrl(text) {
+  const m = String(text == null ? '' : text).match(STREAM_URL_RE);
+  if (!m) return null;
+  // 去掉复制时习惯带上的收尾标点
+  const url = m[0].replace(/[)\]}>"'.,;!?，。；！？、】）》]+$/, '');
+  let u;
+  try { u = new URL(url); } catch (e) { return null; }
+  if (!/^https?:$/.test(u.protocol)) return null;
+  const path = u.pathname.toLowerCase();
+  const ext = (path.match(/\.([a-z0-9]{1,6})$/) || [])[1] || '';
+  if (ext && NON_STREAM_EXTS.includes(ext)) return null;
+  if (ext && STREAM_EXTS.includes(ext)) return url;
+  if (STREAM_HINTS.test(path + u.search)) return url;
+  if (STREAM_PORTS.includes(u.port)) return url;
+  return null;
+}
+
+// 根据地址猜一个可读名称：优先文件名，其次域名
+function guessStreamName(url) {
+  try {
+    const u = new URL(url);
+    const seg = decodeURIComponent((u.pathname.split('/').filter(Boolean).pop() || ''));
+    const base = seg.replace(/\.[a-z0-9]{1,6}$/i, '').replace(/[-_+]+/g, ' ').trim();
+    if (base.length >= 2) return base.slice(0, 40);
+    return (u.hostname.replace(/^www\./, '') || '网络串流').slice(0, 40);
+  } catch (e) { return '网络串流'; }
+}
+
+// 底部提示条：询问是否把检测到的地址绑定到某个按键
+function showStreamDetectDialog(url) {
+  const old = document.querySelector('.stream-detect');
+  if (old) old.remove();
+  const box = document.createElement('div');
+  box.className = 'stream-detect';
+  box.innerHTML = `
+    <div class="stream-detect-card" role="dialog" aria-label="检测到串流地址">
+      <div class="sd-head">
+        <b>检测到串流地址</b>
+        <button type="button" class="sd-x" aria-label="关闭">×</button>
+      </div>
+      <div class="sd-url" title="${escapeHtml(url)}">${escapeHtml(url)}</div>
+      <label class="sd-field"><span>名称</span>
+        <input id="sd-name" type="text" maxlength="40" value="${escapeHtml(guessStreamName(url))}" autocomplete="off">
+      </label>
+      <label class="sd-field"><span>按键</span>
+        <input id="sd-key" type="text" maxlength="4" value="${escapeHtml(allocateStreamKey(state.streams))}"
+          placeholder="3–9、0 或 10–9999" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="sd-err" id="sd-err"></div>
+      <div class="sd-actions">
+        <button type="button" class="sd-btn primary" id="sd-add">添加绑定</button>
+        <button type="button" class="sd-btn" id="sd-ignore">忽略</button>
+      </div>
+    </div>`;
+  document.body.appendChild(box);
+  const nameInp = box.querySelector('#sd-name');
+  const keyInp = box.querySelector('#sd-key');
+  const errEl = box.querySelector('#sd-err');
+  const close = () => box.remove();
+
+  const dismiss = () => { dismissedStreamUrls.add(url); close(); };
+  box.querySelector('.sd-x').addEventListener('click', dismiss);
+  box.querySelector('#sd-ignore').addEventListener('click', dismiss);
+  const add = () => {
+    if (Object.keys(state.streams).length >= MAX_STREAMS) {
+      errEl.textContent = `最多保存 ${MAX_STREAMS} 条串流地址`;
+      return;
+    }
+    const name = nameInp.value.trim() || guessStreamName(url);
+    const key = parseStreamKey(keyInp.value);
+    if (!key) {
+      errEl.textContent = '按键需为 3–9、0 或 3–9999 的编号（1/2 已保留）';
+      return;
+    }
+    if (state.streams[key]) {
+      errEl.textContent = `编号 ${key} 已被占用，请换一个`;
+      return;
+    }
+    state.streams[key] = { name: name.slice(0, 40), url };
+    saveStreams();
+    refreshChannels();
+    refreshStreamKeys();
+    const label = isNumericStreamKey(key) ? `${key} 号` : `${key} 键`;
+    $('#led').textContent = `已绑定${label} · ${name.slice(0, 40)}`;
+    close();
+  };
+  box.querySelector('#sd-add').addEventListener('click', add);
+  box.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.stopPropagation(); dismiss(); return; }
+    if (e.key === 'Enter' && (e.target === nameInp || e.target === keyInp)) {
+      e.preventDefault();
+      add();
+    }
+  });
+  nameInp.focus();
+  if (typeof nameInp.select === 'function') nameInp.select();
+}
+
+// 一段文本可能是串流地址：没绑过就弹提示，绑过就只提示按键
+function maybeOfferStream(text) {
+  if (!state.clipboardStream) return;
+  const url = detectStreamUrl(text);
+  if (!url || dismissedStreamUrls.has(url)) return;
+  if (document.querySelector('.sheet-mask')) return;   // 设置面板打开时不打扰
+  const bound = Object.keys(state.streams).find(k => state.streams[k].url === url);
+  if (bound) {
+    const label = isNumericStreamKey(bound) ? `${bound} 号` : `${bound} 键`;
+    $('#led').textContent = `该串流已绑定到 ${label}`;
+    return;
+  }
+  showStreamDetectDialog(url);
+}
+
+// 窗口重新聚焦时尝试静默读取剪贴板；未授权或读取失败自动降频
+async function readClipboardOnFocus() {
+  if (!state.clipboardStream || document.hidden) return;
+  if (document.querySelector('.sheet-mask, .stream-detect')) return;
+  // 页面还没被用户操作过时不要读取，避免一进页面就弹权限框
+  if (navigator.userActivation && navigator.userActivation.hasBeenActive === false) return;
+  const cb = navigator.clipboard;
+  if (!cb || typeof cb.readText !== 'function') return;
+  if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+    try {
+      const p = await navigator.permissions.query({ name: 'clipboard-read' });
+      if (p.state === 'denied') return;
+      if (p.state === 'granted') clipboardReadFailures = 0;   // 用户后来授权了，重新允许尝试
+    } catch (e) { /* 浏览器不支持该权限名：继续尝试，由浏览器决定 */ }
+  }
+  if (clipboardReadFailures >= 2) return;   // 本次会话最多尝试几次，避免反复弹权限框
+  let text = '';
+  try { text = await cb.readText(); }
+  catch (e) { clipboardReadFailures++; return; }
+  clipboardReadFailures = 0;
+  if (!text || text === lastClipboardText) return;
+  lastClipboardText = text;
+  maybeOfferStream(text);
 }
 
 // ============ 串流 / 曲目录制 ============
@@ -1801,6 +2140,13 @@ $('#btn-settings').addEventListener('click', () => {
         </select>
       </div>
       <div class="row">
+        <span>剪贴板识别串流</span>
+        <select id="s-clip">
+          <option value="on"${state.clipboardStream?' selected':''}>开启</option>
+          <option value="off"${!state.clipboardStream?' selected':''}>关闭</option>
+        </select>
+      </div>
+      <div class="row">
         <span>口播间隔（首）</span>
         <input id="s-voice" type="number" min="0" max="99" value="${state.voiceInterval}" style="width:60px;">
       </div>
@@ -1868,9 +2214,7 @@ $('#btn-settings').addEventListener('click', () => {
 
   // 优先分配空闲实体键，用完后从 10 起找最小空闲编号
   function nextFreeStreamKey() {
-    for (const k of STREAM_KEYS) if (!draft[k]) return k;
-    for (let n = 10; n <= MAX_STREAM_NUM; n++) if (!draft[String(n)]) return String(n);
-    return '';
+    return allocateStreamKey(draft);
   }
 
   function renderStreams() {
@@ -2048,6 +2392,7 @@ $('#btn-settings').addEventListener('click', () => {
   $('#s-close').onclick = () => {
     state.noiseOn = $('#s-noise').value === 'on';
     state.voiceInterval = +$('#s-voice').value;
+    state.clipboardStream = $('#s-clip').value === 'on';
     state.streams = draft;
     saveStreams();
     state.webLinks = webDraft;
@@ -2099,6 +2444,25 @@ document.addEventListener('keydown', e => {
     const btn = getKeyButton(e.key);
     if (btn) { e.preventDefault(); btn.click(); }
   }
+});
+
+// ============ 剪贴板串流提示 ============
+// 粘贴是最可靠的入口：用户主动按 Ctrl/Cmd+V 时读取剪贴板文本
+document.addEventListener('paste', e => {
+  const t = e.target;
+  const tag = (t && t.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  if (t && t.isContentEditable) return;
+  const data = e.clipboardData;
+  if (!data) return;
+  const text = data.getData('text/plain') || data.getData('text') || '';
+  if (!text) return;
+  maybeOfferStream(text);
+});
+// 从别的窗口复制后切回来：仅在浏览器允许时静默读取
+window.addEventListener('focus', () => { readClipboardOnFocus(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) readClipboardOnFocus();
 });
 
 // ============ Service Worker ============

@@ -7,10 +7,21 @@
 <title>极简FM</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png" type="image/png">
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
 <div id="app">
+
+  <!-- 导入进度条（顶部浮层，导入 / 恢复曲库时显示） -->
+  <div id="import-progress" class="import-progress" hidden aria-hidden="true">
+    <div class="ip-row">
+      <span class="ip-text" id="ip-text" role="status" aria-live="polite">正在导入</span>
+      <span class="ip-count" id="ip-count"></span>
+    </div>
+    <div class="ip-track" id="ip-track" role="progressbar" aria-label="导入进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <i class="ip-fill" id="ip-fill"></i>
+    </div>
+  </div>
 
   <!-- LED 状态条 -->
   <div id="led">极简FM · 就绪</div>
@@ -128,6 +139,6 @@
   <div id="toast" style="display:none;"></div>
 </div>
 
-<script src="app.js?v=13"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>
