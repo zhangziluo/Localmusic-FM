@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-console.log('极简FM · app.js?v=10 已加载');
+console.log('极简FM · app.js?v=12 已加载');
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -57,10 +57,11 @@ function isFavorite(name, fileName) {
 const UNLOCK_TRACKS = 15;   // 曲库超过该数量后解锁 CH3-CH9
 const MAX_PLAY_SECONDS = 10000 * 3600; // 到 10000:00:00 即归零，最大显示 9999:59:59
 
-// 网络串流可绑定的按键：3-9 与 * 0（1 随机 / 2 红心 保留给本地曲库）
+// 网络串流可绑定的按键：3-9 与 0（1 随机 / 2 红心 保留给本地曲库）
 // 另开放编号 10-9999：没有实体键，通过 # 选号（输入编号后按 #）触发播放
-// '#' 让位给按序号点歌 / 选台（前缀 + 确认），不再用于网络串流
-const STREAM_KEYS = ['3', '4', '5', '6', '7', '8', '9', '*', '0'];
+// '#' 让位给按序号点歌 / 选台（前缀 + 确认）；'*' 让位给网页跳转，
+// 二者都不再用于网络串流，历史已有绑定会在 loadStreams 中被丢弃
+const STREAM_KEYS = ['3', '4', '5', '6', '7', '8', '9', '0'];
 const MAX_STREAMS = 1000;      // 默认最多保存 1000 条串流地址
 const MAX_STREAM_NUM = 9999;   // 编号上限，与选号输入位数一致
 
@@ -114,7 +115,103 @@ const state = {
   ch: 1, accent: '#ff8c42', cardStyle: 'dark',
   favorites: new Set(),
   streams: {}, mode: 'local', streamKey: null,
+  webLinks: {},         // 网页跳转编号 → URL 映射（* 前缀触发）
+  history: [],          // 本地曲目播放记录（含时间戳），用于导出 .m3u
 };
+
+// ============ 播放记录（导出 .m3u 用） ============
+const HISTORY_KEY = 'fm_history';
+const MAX_HISTORY = 2000;   // 最多保留 2000 条记录，超出丢弃最旧的
+
+function loadHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    if (!Array.isArray(list)) return [];
+    return list.filter(h => h && typeof h.ts === 'number' &&
+      (typeof h.name === 'string' || typeof h.fileName === 'string'));
+  } catch (e) { return []; }
+}
+
+function saveHistory() {
+  try { localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history)); }
+  catch (e) { console.log('保存播放记录失败:', e); }
+}
+
+// 每次开始播放本地曲目时记录一条
+function recordPlay(t) {
+  if (!t) return;
+  state.history.push({
+    name: t.name || '',
+    fileName: t.fileName || (t.file ? t.file.name : '') || '',
+    path: t.path || '',
+    ts: Date.now(),
+  });
+  if (state.history.length > MAX_HISTORY) {
+    state.history.splice(0, state.history.length - MAX_HISTORY);
+  }
+  saveHistory();
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// 生成本地时间的 datetime-local 值：YYYY-MM-DDTHH:mm
+function toLocalInputValue(ts) {
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}` +
+    `T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function parseLocalInputValue(v) {
+  if (!v) return NaN;
+  const ts = new Date(v).getTime();
+  return Number.isFinite(ts) ? ts : NaN;
+}
+
+// 预设时间范围：今天 / 昨天 / 近 7 天（均以本地时间为界）
+function presetRange(preset, now = new Date()) {
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const end = now.getTime();
+  if (preset === 'today') return [startOfToday, end];
+  if (preset === 'yesterday') return [startOfToday - 86400000, startOfToday];
+  if (preset === 'week') return [end - 7 * 86400000, end];
+  return null;
+}
+
+// 纯 M3U：一行一个条目，优先相对路径，其次文件名
+function buildM3u(list) {
+  const lines = ['#EXTM3U'];
+  for (const h of list) {
+    const p = (h.path && String(h.path).trim()) ||
+      (h.fileName && String(h.fileName).trim()) ||
+      (h.name && String(h.name).trim()) || '';
+    if (p) lines.push(p);
+  }
+  return lines.join('\n') + '\n';
+}
+
+function downloadBlob(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 2000);
+}
+
+// 按时间范围导出播放记录为 .m3u；返回导出条数
+function exportHistory(startTs, endTs) {
+  const list = state.history.filter(h => h.ts >= startTs && h.ts <= endTs)
+    .sort((a, b) => a.ts - b.ts);
+  if (!list.length) return 0;
+  const d = new Date();
+  const stamp = `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-` +
+    `${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`;
+  downloadBlob(buildM3u(list), `fm-${stamp}.m3u`, 'audio/x-mpegurl');
+  return list.length;
+}
 
 // 整点报时运行态（变量须在 updateClock 首次调用前初始化）
 let chiming = false;          // 报时进行中，防重入
@@ -125,6 +222,53 @@ let chimeResume = false;      // 报时前是否在播放，决定结束后是�
 const dial = { active: false, buf: '', timer: 0 };
 const DIAL_TIMEOUT = 5000;   // 选号态 5 秒无操作自动取消
 const MAX_DIAL_DIGITS = 4;   // 最多输入 4 位（9999 首）
+
+// ============ 网页跳转（* → 数字 → *）============
+// * 键作为前缀：输入 0–999999 的编号，再按 * 在新窗口打开该编号绑定的网址
+const WEB_LINKS_KEY = 'fm_webjumps';
+const MAX_WEB_NUM = 999999;   // 编号上限（6 位）
+const MAX_WEB_LINKS = 1000;   // 最多保存 1000 条网址
+const MAX_WEB_DIGITS = 6;     // 编号最多 6 位
+const WEB_TIMEOUT = 5000;     // 5 秒无操作自动取消
+const DEFAULT_WEB_LINKS = {
+  '1': 'https://streamurl.link',
+  '2': 'https://roamdial.com',
+  '3': 'https://globalradio.app',
+};
+const web = { active: false, buf: '', timer: 0 };
+
+// 校验并规范化网页跳转编号：1–6 位数字，去掉前导 0；非法返回 null
+function parseWebKey(raw) {
+  const key = String(raw == null ? '' : raw).trim();
+  if (!/^\d{1,6}$/.test(key)) return null;
+  const n = parseInt(key, 10);
+  if (!Number.isFinite(n) || n < 0 || n > MAX_WEB_NUM) return null;
+  return String(n);
+}
+
+function saveWebLinks() {
+  try { localStorage.setItem(WEB_LINKS_KEY, JSON.stringify(state.webLinks)); }
+  catch (e) { console.log('保存网页跳转失败:', e); }
+}
+function loadWebLinks() {
+  let raw;
+  try { raw = localStorage.getItem(WEB_LINKS_KEY); }
+  catch (e) { console.log('读取网页跳转失败:', e); return { ...DEFAULT_WEB_LINKS }; }
+  if (raw == null) return { ...DEFAULT_WEB_LINKS };   // 首次使用：内置默认地址
+  const out = {};
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return out;
+    for (const rawKey of Object.keys(obj)) {
+      if (Object.keys(out).length >= MAX_WEB_LINKS) break;
+      const key = parseWebKey(rawKey);
+      if (!key) continue;
+      const url = obj[rawKey];
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) out[key] = url;
+    }
+  } catch (e) { console.log('读取网页跳转失败:', e); }
+  return out;
+}
 
 // ============ 彩蛋：数字键连击 ============
 // 连续按出 19930214 或 930214，新窗口打开 create.myfami.cn
@@ -191,6 +335,8 @@ function applyTheme(resetAccent = false) {
   const favs = JSON.parse(localStorage.getItem('fm_favs') || '[]');
   state.favorites = new Set(favs);
   state.streams = loadStreams();
+  state.webLinks = loadWebLinks();
+  state.history = loadHistory();
   refreshDuration();
 
   applyTheme();
@@ -223,6 +369,7 @@ function applyTheme(resetAccent = false) {
     $('#led').textContent = `上次曲库 ${state.tracks.length} 首 · 请重新导入文件夹`;
   }
   refreshDuration();
+  refreshRecordButton();
 })();
 
 // ============ 时钟 ============
@@ -569,12 +716,14 @@ audio.addEventListener('play', () => {
   const icon = $('#icon-play');
   if (icon) icon.innerHTML = '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>';
   if (state.noiseOn) startNoise();
+  refreshRecordButton();
 });
 audio.addEventListener('pause', () => {
   commitPlayTime(true);
   const icon = $('#icon-play');
   if (icon) icon.innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/>';
   stopNoise();
+  refreshRecordButton();
 });
 audio.addEventListener('ended', () => {
   commitPlayTime(true);
@@ -582,6 +731,7 @@ audio.addEventListener('ended', () => {
     // 直播流结束（或点播流播完）：不自动切回本地曲目
     state.playing = false;
     $('#led').textContent = '网络串流已结束';
+    refreshRecordButton();
     return;
   }
   playTrack(pickNext());
@@ -590,6 +740,7 @@ audio.addEventListener('error', () => {
   if (state.mode !== 'stream') return;
   state.playing = false;
   $('#led').textContent = '串流加载失败 · 地址或网络异常';
+  refreshRecordButton();
 });
 audio.addEventListener('timeupdate', () => {
   if (state.mode === 'stream') {
@@ -622,9 +773,11 @@ function pickNext() {
 let currentObjectUrl = null;
 function playTrack(t) {
   if (!t || !t.file) return;
+  if (isRecording()) stopRecording(true);   // 切歌时结束当前录制
   state.mode = 'local';
   state.streamKey = null;
   state.current = t;
+  recordPlay(t);
   audio.volume = state.musicVolume;
   const prevUrl = currentObjectUrl;
   currentObjectUrl = URL.createObjectURL(t.file);
@@ -635,6 +788,7 @@ function playTrack(t) {
   $('#track-title').textContent = t.name;
   $('#track-sub').textContent = `CH${state.ch}`;
   $('#btn-heart').classList.toggle('active', !!t.fav);
+  refreshRecordButton();
 }
 
 function saveConfig() {
@@ -698,6 +852,7 @@ function runWithLibrary(action) {
 }
 $('#btn-play').addEventListener('click', () => {
   cancelDial(false);
+  cancelWebJump(true);
   if (state.mode === 'stream') {
     if (state.playing) { audio.pause(); state.playing = false; }
     else { audio.play().catch(() => {}); state.playing = true; }
@@ -707,8 +862,8 @@ $('#btn-play').addEventListener('click', () => {
   if (state.playing) { audio.pause(); state.playing = false; }
   else { audio.play(); state.playing = true; }
 });
-$('#btn-next').addEventListener('click', () => { cancelDial(false); runWithLibrary(playRandom); });
-$('#btn-prev').addEventListener('click', () => { cancelDial(false); runWithLibrary(playRandom); });
+$('#btn-next').addEventListener('click', () => { cancelDial(false); cancelWebJump(true); runWithLibrary(playRandom); });
+$('#btn-prev').addEventListener('click', () => { cancelDial(false); cancelWebJump(true); runWithLibrary(playRandom); });
 $('#btn-heart').addEventListener('click', () => {
   if (!state.current) return;
   state.current.fav = !state.current.fav;
@@ -892,6 +1047,13 @@ function refreshStreamKeys() {
       setKeySmall(k, '点歌');
       return;
     }
+    if (key === '*') {
+      k.classList.remove('streaming');
+      k.removeAttribute('title');
+      k.setAttribute('aria-label', '星号键：网页跳转，再按一次确认');
+      setKeySmall(k, '跳转');
+      return;
+    }
     const s = state.streams[key];
     k.classList.toggle('streaming', !!s);
     if (s) {
@@ -963,6 +1125,7 @@ function activateChannel(btn, ch) {
 // 播放网络串流（直播流：无时长、ended 不自动切歌）
 function playStream(key, stream) {
   if (!stream || !stream.url) return;
+  if (isRecording()) stopRecording(true);   // 切换串流时结束当前录制
   state.mode = 'stream';
   state.streamKey = key;
   state.current = null;        // 当前不是本地曲目
@@ -989,6 +1152,256 @@ function playStream(key, stream) {
   const bar = $('#progress-bar');
   if (bar) bar.style.width = '100%';
   $('#led').textContent = `网络串流 · ${stream.name}`;
+  refreshRecordButton();
+}
+
+// ============ 串流 / 曲目录制 ============
+// 用独立的 Audio 元素 + MediaElementSource 接入同一 AudioContext，
+// 只连到 MediaStreamDestination 交给 MediaRecorder，不影响主播放器出声。
+const REC_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4',
+];
+const recUrlCache = Object.create(null);   // 串流 URL → 是否可录制（CORS）
+let recEl = null, recSrcNode = null, recDest = null, recorder = null;
+let recChunks = [], recLocalUrl = null, recStarting = false, recSaveOnStop = true;
+
+function recordingSupported() {
+  return typeof window !== 'undefined' && typeof window.MediaRecorder === 'function';
+}
+
+function pickRecordMime() {
+  if (!recordingSupported()) return '';
+  for (const m of REC_MIME_CANDIDATES) {
+    try { if (MediaRecorder.isTypeSupported(m)) return m; } catch (e) {}
+  }
+  return '';
+}
+
+function isRecording() {
+  return !!recorder && recorder.state !== 'inactive';
+}
+
+function isSameOrigin(url) {
+  try { return new URL(url, location.href).origin === location.origin; }
+  catch (e) { return false; }
+}
+
+// 同源或 CORS 允许才视为可录制；结果按 URL 缓存
+function canRecordUrl(url) {
+  if (!url) return Promise.resolve(false);
+  if (url in recUrlCache) return Promise.resolve(recUrlCache[url]);
+  if (isSameOrigin(url)) { recUrlCache[url] = true; return Promise.resolve(true); }
+  if (typeof fetch !== 'function') { recUrlCache[url] = false; return Promise.resolve(false); }
+
+  let ctrl = null;
+  try { ctrl = new AbortController(); } catch (e) {}
+  const opt = { method: 'GET', mode: 'cors', cache: 'no-store' };
+  if (ctrl) opt.signal = ctrl.signal;
+
+  return fetch(url, opt).then(() => true).catch(() => false).then(ok => {
+    recUrlCache[url] = ok;
+    if (ctrl) { try { ctrl.abort(); } catch (e) {} }
+    return ok;
+  });
+}
+
+let recCheckToken = 0;
+async function refreshRecordButton() {
+  const btn = $('#btn-record');
+  if (!btn) return;
+
+  if (isRecording()) {
+    btn.disabled = false;
+    btn.classList.add('recording');
+    btn.title = '停止录制';
+    btn.setAttribute('aria-label', '停止录制');
+    return;
+  }
+  btn.classList.remove('recording');
+  btn.setAttribute('aria-label', '录制当前声音');
+
+  if (!recordingSupported()) {
+    btn.disabled = true;
+    btn.title = '当前浏览器不支持录制';
+    return;
+  }
+  if (!state.playing) {
+    btn.disabled = true;
+    btn.title = '播放中才能录制';
+    return;
+  }
+  if (state.mode === 'local') {
+    btn.disabled = !(state.current && state.current.file);
+    btn.title = btn.disabled ? '没有可录制的曲目' : '录制当前曲目';
+    return;
+  }
+
+  const s = state.streams[state.streamKey];
+  if (!s) {
+    btn.disabled = true;
+    btn.title = '没有正在播放的串流';
+    return;
+  }
+  const token = ++recCheckToken;
+  const ok = await canRecordUrl(s.url);
+  // 检测期间状态可能已变化，丢弃过期结果
+  if (token !== recCheckToken || isRecording() || state.mode !== 'stream') return;
+  if (!state.playing) {
+    btn.disabled = true;
+    btn.title = '播放中才能录制';
+    return;
+  }
+  const cur = state.streams[state.streamKey];
+  if (!cur || cur.url !== s.url) return;
+
+  btn.disabled = !ok;
+  btn.title = ok ? '录制当前串流' : '该串流跨域，无法录制';
+}
+
+async function startRecording() {
+  if (isRecording() || recStarting) return;
+  if (!recordingSupported()) {
+    $('#led').textContent = '当前浏览器不支持录制';
+    refreshRecordButton();
+    return;
+  }
+
+  let src = '', crossOrigin = false;
+  if (state.mode === 'stream') {
+    const s = state.streams[state.streamKey];
+    if (!s) { $('#led').textContent = '没有正在播放的串流'; return; }
+    const ok = await canRecordUrl(s.url);
+    if (!ok) {
+      $('#led').textContent = '该串流跨域，无法录制';
+      refreshRecordButton();
+      return;
+    }
+    src = s.url;
+    crossOrigin = true;
+  } else if (state.mode === 'local') {
+    if (!state.current || !state.current.file) {
+      $('#led').textContent = '没有可录制的曲目';
+      return;
+    }
+    recLocalUrl = URL.createObjectURL(state.current.file);
+    src = recLocalUrl;
+  } else {
+    return;
+  }
+
+  recStarting = true;
+  try {
+    const ctx = ensureNoiseCtx();
+    if (!ctx) throw new Error('AudioContext 不可用');
+    if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+
+    recEl = new Audio();
+    recEl.preload = 'auto';
+    if (crossOrigin) recEl.crossOrigin = 'anonymous';
+    recEl.src = src;
+
+    recSrcNode = ctx.createMediaElementSource(recEl);
+    recDest = ctx.createMediaStreamDestination();
+    recSrcNode.connect(recDest);   // 只进录音目标，不接扬声器
+
+    const mime = pickRecordMime();
+    recorder = mime
+      ? new MediaRecorder(recDest.stream, { mimeType: mime })
+      : new MediaRecorder(recDest.stream);
+    recChunks = [];
+    recorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+    recorder.onstop = finalizeRecording;
+    recorder.onerror = () => {
+      if (!recorder) return;
+      $('#led').textContent = '录制出错 · 已停止';
+      recSaveOnStop = false;
+      stopRecording(false);
+    };
+
+    // 本地曲目：从当前播放进度开始录
+    if (state.mode === 'local') {
+      recEl.addEventListener('loadedmetadata', () => {
+        try {
+          if (isFinite(audio.currentTime) && audio.currentTime > 0) recEl.currentTime = audio.currentTime;
+        } catch (e) {}
+      }, { once: true });
+    }
+    recEl.addEventListener('error', () => {
+      if (!recorder) return;   // 清理阶段触发的 error 忽略
+      $('#led').textContent = '录制源加载失败 · 可能跨域';
+      recSaveOnStop = false;
+      stopRecording(false);
+    }, { once: true });
+    recEl.addEventListener('ended', () => {
+      if (isRecording()) stopRecording(true);
+    }, { once: true });
+
+    recSaveOnStop = true;
+    recorder.start(1000);
+    const p = recEl.play();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+    $('#led').textContent = '正在录制…';
+  } catch (e) {
+    console.log('录制启动失败:', e);
+    $('#led').textContent = '录制启动失败';
+    cleanupRecording();
+  } finally {
+    recStarting = false;
+    refreshRecordButton();
+  }
+}
+
+function stopRecording(save = true) {
+  recSaveOnStop = save;
+  if (recorder && recorder.state !== 'inactive') {
+    try { recorder.stop(); } catch (e) { finalizeRecording(); }
+  } else {
+    finalizeRecording();
+  }
+}
+
+function finalizeRecording() {
+  const mime = (recorder && recorder.mimeType) || '';
+  const chunks = recChunks.slice();
+  const save = recSaveOnStop;
+  cleanupRecording();
+
+  if (save && chunks.length) {
+    const type = mime || 'audio/webm';
+    const ext = /mp4/.test(type) ? 'mp4' : /ogg/.test(type) ? 'ogg' : 'webm';
+    const blob = new Blob(chunks, { type });
+    const url = URL.createObjectURL(blob);
+    const d = new Date();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fm-rec-${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}-` +
+      `${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 2000);
+    $('#led').textContent = '录制完成 · 已下载';
+  } else if (save) {
+    $('#led').textContent = '录制结束 · 没有音频数据';
+  }
+  refreshRecordButton();
+}
+
+function cleanupRecording() {
+  try { if (recEl) { recEl.pause(); recEl.removeAttribute('src'); recEl.load(); } } catch (e) {}
+  try { if (recSrcNode) recSrcNode.disconnect(); } catch (e) {}
+  try { if (recDest) recDest.disconnect(); } catch (e) {}
+  if (recLocalUrl) { try { URL.revokeObjectURL(recLocalUrl); } catch (e) {} }
+  recEl = null; recSrcNode = null; recDest = null;
+  recorder = null; recChunks = []; recLocalUrl = null;
+}
+
+const recBtn = $('#btn-record');
+if (recBtn) {
+  recBtn.addEventListener('click', () => {
+    if (isRecording()) stopRecording(true);
+    else startRecording();
+  });
 }
 
 // ============ 按序号点歌 / 选台（# → 数字 → #）============
@@ -1036,6 +1449,7 @@ function cancelDial(silent = true) {
 
 function startDial() {
   if (dial.active) return;
+  if (web.active) cancelWebJump(true);   // 退出网页跳转态，避免两个前缀冲突
   if (state.tracks.length < 3 && !hasNumericStreams()) {
     $('#led').textContent = '曲目不足 3 首 · 无法按序号点歌';
     return;
@@ -1117,6 +1531,108 @@ function handleHashKey() {
   else startDial();
 }
 
+// ============ 网页跳转（* → 数字 → *）============
+function renderWeb() {
+  const dashCh = $('#dash-ch');
+  if (dashCh) dashCh.textContent = web.buf ? `↗${web.buf}` : '↗';
+  const starKey = getKeyButton('*');
+  if (starKey) starKey.classList.add('webjump');
+  const dash = $('#dashboard');
+  if (dash) dash.classList.add('dash-link');
+}
+
+function armWebTimer() {
+  if (web.timer) clearTimeout(web.timer);
+  web.timer = setTimeout(() => cancelWebJump(false), WEB_TIMEOUT);
+}
+
+function cancelWebJump(silent = true) {
+  if (!web.active) return;
+  web.active = false;
+  web.buf = '';
+  if (web.timer) { clearTimeout(web.timer); web.timer = 0; }
+  const starKey = getKeyButton('*');
+  if (starKey) starKey.classList.remove('webjump');
+  const dash = $('#dashboard');
+  if (dash) dash.classList.remove('dash-link');
+  renderDash();
+  if (!silent) $('#led').textContent = '已取消网页跳转';
+}
+
+function startWebJump() {
+  if (web.active) return;
+  if (dial.active) cancelDial(true);   // 与选号态互斥
+  web.active = true;
+  web.buf = '';
+  renderWeb();
+  $('#led').textContent = '网页跳转：输入 0–999999 · 按 * 确认';
+  armWebTimer();
+}
+
+function webDigit(d) {
+  if (!web.active) return;
+  if (!/^[0-9]$/.test(d)) return;
+  if (web.buf.length >= MAX_WEB_DIGITS) return;
+  if (web.buf === '') {
+    web.buf = d;                                   // 单独一个 0 也是合法编号
+  } else if (web.buf === '0') {
+    web.buf = d === '0' ? '0' : d;                 // 避免 01 这类前导零编号
+  } else {
+    web.buf += d;
+  }
+  renderWeb();
+  $('#led').textContent = `网页跳转：↗${web.buf} · 按 * 确认`;
+  armWebTimer();
+}
+
+// 数码屏短暂显示「↗编号」后恢复频道，用于跳转瞬间的反馈
+function flashDashLabel(text) {
+  const dashCh = $('#dash-ch');
+  const dash = $('#dashboard');
+  if (dashCh) dashCh.textContent = text;
+  if (!dash) { setTimeout(renderDash, 800); return; }
+  dash.classList.remove('dash-link-flash');
+  void dash.offsetWidth;   // 触发重排，重启动画
+  dash.classList.add('dash-link-flash');
+  setTimeout(() => {
+    dash.classList.remove('dash-link-flash');
+    renderDash();
+  }, 800);
+}
+
+function openWebLink(url) {
+  try {
+    const win = window.open(url, '_blank', 'noopener,noreferrer');
+    if (win) win.opener = null;
+  } catch (e) { console.log('网页跳转打开失败:', e); }
+}
+
+function confirmWebJump() {
+  if (!web.active) return;
+  if (!web.buf) {
+    $('#led').textContent = '请先输入编号（0–999999）';
+    armWebTimer();
+    return;
+  }
+  const num = web.buf;
+  const url = state.webLinks[num];
+  cancelWebJump(true);
+  if (!url) {
+    $('#led').textContent = `编号 ${num} 未绑定网页`;
+    return;
+  }
+  flashDashLabel(`↗${num}`);
+  $('#led').textContent = `网页跳转 · 正在打开 ${url}`;
+  openWebLink(url);
+}
+
+// * 键：网页跳转确认 / 取消选号 / 进入网页跳转
+function handleStarKey() {
+  if (web.active) { confirmWebJump(); return; }
+  if (dial.active) { cancelDial(false); return; }
+  startWebJump();
+}
+
 // ============ 彩蛋：数字键连击 ============
 function resetEggBuffer() {
   eggBuf = '';
@@ -1125,6 +1641,7 @@ function resetEggBuffer() {
 
 function openEasterEgg() {
   cancelDial(true);
+  cancelWebJump(true);
   $('#led').textContent = '彩蛋已触发 · 正在打开…';
   try {
     const win = window.open(EGG_URL, '_blank', 'noopener,noreferrer');
@@ -1150,6 +1667,9 @@ document.querySelectorAll('.key[data-ch]').forEach(btn => {
     const key = btn.dataset.ch;
     if (recordEggDigit(key)) return;   // 彩蛋命中则终止常规处理
 
+    // 网页跳转态下 1-9 作为编号位（不切频道）
+    if (web.active) { webDigit(key); return; }
+
     // 选号态下 1-9 作为数字位（不切频道）
     if (dial.active) { dialDigit(key); return; }
 
@@ -1165,16 +1685,15 @@ document.querySelectorAll('.key[data-ch]').forEach(btn => {
   });
 });
 
-// 数字键盘 * / 0 / #：# 为点歌键；选号态下 * 取消、0 作为数字位
+// 数字键盘 * / 0 / #：# 为点歌键、* 为网页跳转键；选号态下 * 取消、0 作为数字位
 document.querySelectorAll('.key[data-key]').forEach(btn => {
   btn.addEventListener('click', () => {
     const key = btn.dataset.key;
     if (recordEggDigit(key)) return;   // 0 也参与彩蛋连击
     if (key === '#') { handleHashKey(); return; }
-    if (dial.active) {
-      if (key === '*') { cancelDial(false); return; }
-      if (key === '0') { dialDigit('0'); return; }
-    }
+    if (key === '*') { handleStarKey(); return; }
+    if (web.active && key === '0') { webDigit('0'); return; }
+    if (dial.active && key === '0') { dialDigit('0'); return; }
     const stream = state.streams[key];
     if (stream) { playStream(key, stream); return; }
     $('#led').textContent = `${key} 键暂未开放`;
@@ -1228,12 +1747,39 @@ $('#btn-settings').addEventListener('click', () => {
       <div id="s-stream-form" class="stream-form" style="display:none;">
         <input id="s-stream-name" type="text" placeholder="名称，如 城市爵士" maxlength="40">
         <input id="s-stream-url" type="text" placeholder="https://example.com/live.mp3" autocomplete="off" spellcheck="false">
-        <input id="s-stream-key" type="text" placeholder="按键/编号：3–9、*、0 或 10–9999（留空自动分配）" maxlength="4" autocomplete="off" spellcheck="false">
+        <input id="s-stream-key" type="text" placeholder="按键/编号：3–9、0 或 10–9999（留空自动分配）" maxlength="4" autocomplete="off" spellcheck="false">
         <div class="stream-form-actions">
           <button type="button" id="s-stream-save" class="mini-btn">确认添加</button>
           <button type="button" id="s-stream-cancel" class="mini-btn ghost">取消</button>
         </div>
         <div id="s-stream-err" class="stream-err"></div>
+      </div>
+      <div class="row stream-head">
+        <span>网页跳转</span>
+        <span class="stream-cap" id="s-web-cap"></span>
+        <button type="button" id="s-web-add" class="mini-btn">＋ 添加</button>
+      </div>
+      <div id="s-web-list" class="stream-list"></div>
+      <div id="s-web-form" class="stream-form" style="display:none;">
+        <input id="s-web-key" type="text" placeholder="编号：0–999999（留空自动分配）" maxlength="6" inputmode="numeric" autocomplete="off" spellcheck="false">
+        <input id="s-web-url" type="text" placeholder="https://example.com" autocomplete="off" spellcheck="false">
+        <div class="stream-form-actions">
+          <button type="button" id="s-web-save" class="mini-btn">确认添加</button>
+          <button type="button" id="s-web-cancel" class="mini-btn ghost">取消</button>
+        </div>
+        <div id="s-web-err" class="stream-err"></div>
+      </div>
+      <div class="row export-head"><span>导出播放记录</span></div>
+      <div class="export-box">
+        <div class="export-presets">
+          <button type="button" class="mini-btn" data-range="today">今天</button>
+          <button type="button" class="mini-btn" data-range="yesterday">昨天</button>
+          <button type="button" class="mini-btn" data-range="week">近 7 天</button>
+        </div>
+        <label class="export-field">起 <input id="s-hist-start" type="datetime-local"></label>
+        <label class="export-field">止 <input id="s-hist-end" type="datetime-local"></label>
+        <button type="button" id="s-hist-export" class="mini-btn">导出 .m3u</button>
+        <div id="s-hist-info" class="hist-info"></div>
       </div>
       <button id="s-close" style="width:100%;margin-top:20px;padding:12px;background:var(--accent);color:var(--bg);border:none;border-radius:10px;font-size:14px;cursor:pointer;">完成</button>
     </div>`;
@@ -1303,7 +1849,7 @@ $('#btn-settings').addEventListener('click', () => {
     if (!/^https?:\/\//i.test(url)) { errEl.textContent = '流地址需以 http:// 或 https:// 开头'; return; }
     let key = parseStreamKey(rawKey);
     if (!key && !rawKey.trim()) key = nextFreeStreamKey();
-    if (!key) { errEl.textContent = '按键需为 3–9、*、0，或 3–9999 的编号（1/2 保留）'; return; }
+    if (!key) { errEl.textContent = '按键需为 3–9、0，或 3–9999 的编号（1/2 保留）'; return; }
     if (draft[key]) { errEl.textContent = `编号 ${key} 已被占用，请先删除或换一个`; return; }
     if (Object.keys(draft).length >= MAX_STREAMS) {
       errEl.textContent = `最多保存 ${MAX_STREAMS} 条串流地址`;
@@ -1322,6 +1868,108 @@ $('#btn-settings').addEventListener('click', () => {
 
   renderStreams();
 
+  // ---- 网页跳转（* 前缀）编辑：面板内临时副本，点「完成」才提交 ----
+  const webDraft = JSON.parse(JSON.stringify(state.webLinks));
+  const webListEl = mask.querySelector('#s-web-list');
+  const webFormEl = mask.querySelector('#s-web-form');
+  const webKeyInp = mask.querySelector('#s-web-key');
+  const webUrlInp = mask.querySelector('#s-web-url');
+  const webErrEl = mask.querySelector('#s-web-err');
+  const webAddBtn = mask.querySelector('#s-web-add');
+  const webCapEl = mask.querySelector('#s-web-cap');
+
+  // 从 0 起找最小空闲编号
+  function nextFreeWebKey() {
+    for (let n = 0; n <= MAX_WEB_NUM; n++) if (!webDraft[String(n)]) return String(n);
+    return '';
+  }
+
+  function renderWebLinks() {
+    const keys = Object.keys(webDraft).sort((a, b) => +a - +b);
+    webListEl.innerHTML = keys.length ? keys.map(k => `
+      <div class="stream-item">
+        <span class="stream-key">${k}</span>
+        <span class="stream-meta">
+          <b>↗ 编号 ${k}</b>
+          <i>${escapeHtml(webDraft[k])}</i>
+        </span>
+        <button type="button" class="stream-del web-del" data-key="${k}">删除</button>
+      </div>`).join('')
+      : '<div class="stream-empty">还没有网页跳转，点右上角「＋ 添加」</div>';
+
+    if (webCapEl) webCapEl.textContent = `${keys.length} / ${MAX_WEB_LINKS}`;
+    if (webAddBtn) webAddBtn.disabled = keys.length >= MAX_WEB_LINKS;
+  }
+
+  webListEl.addEventListener('click', e => {
+    const b = e.target.closest('.web-del');
+    if (!b) return;
+    delete webDraft[b.dataset.key];
+    renderWebLinks();
+  });
+
+  webAddBtn.addEventListener('click', () => {
+    if (Object.keys(webDraft).length >= MAX_WEB_LINKS) return;
+    webFormEl.style.display = 'flex';
+    webErrEl.textContent = '';
+    webUrlInp.value = '';
+    webKeyInp.value = nextFreeWebKey();
+    webUrlInp.focus();
+  });
+
+  mask.querySelector('#s-web-save').addEventListener('click', () => {
+    const url = webUrlInp.value.trim();
+    const rawKey = webKeyInp.value;
+    if (!/^https?:\/\//i.test(url)) { webErrEl.textContent = '网址需以 http:// 或 https:// 开头'; return; }
+    let key = parseWebKey(rawKey);
+    if (!key && !rawKey.trim()) key = nextFreeWebKey();
+    if (!key) { webErrEl.textContent = '编号需为 0–999999 的数字'; return; }
+    if (webDraft[key]) { webErrEl.textContent = `编号 ${key} 已被占用，请先删除或换一个`; return; }
+    if (Object.keys(webDraft).length >= MAX_WEB_LINKS) {
+      webErrEl.textContent = `最多保存 ${MAX_WEB_LINKS} 条网址`;
+      return;
+    }
+    webDraft[key] = url;
+    webFormEl.style.display = 'none';
+    webErrEl.textContent = '';
+    renderWebLinks();
+  });
+
+  mask.querySelector('#s-web-cancel').addEventListener('click', () => {
+    webFormEl.style.display = 'none';
+    webErrEl.textContent = '';
+  });
+
+  renderWebLinks();
+
+  // ---- 导出播放记录 → .m3u（预设 今天 / 昨天 / 近 7 天 + 自定义起止） ----
+  const histStart = mask.querySelector('#s-hist-start');
+  const histEnd = mask.querySelector('#s-hist-end');
+  const histInfo = mask.querySelector('#s-hist-info');
+  const RANGE_LABEL = { today: '今天', yesterday: '昨天', week: '近 7 天' };
+  const applyRange = preset => {
+    const r = presetRange(preset);
+    if (!r) return;
+    histStart.value = toLocalInputValue(r[0]);
+    histEnd.value = toLocalInputValue(r[1]);
+    histInfo.textContent = `共 ${state.history.length} 条记录 · 已选「${RANGE_LABEL[preset]}」`;
+  };
+  mask.querySelectorAll('.export-presets .mini-btn').forEach(b => {
+    b.addEventListener('click', () => applyRange(b.dataset.range));
+  });
+  applyRange('today');
+  mask.querySelector('#s-hist-export').addEventListener('click', () => {
+    const s = parseLocalInputValue(histStart.value);
+    const eRaw = parseLocalInputValue(histEnd.value);
+    // datetime-local 默认精确到分钟：结束时间按所选分钟的最后一毫秒计
+    const e = Number.isFinite(eRaw) ? eRaw + 59999 : eRaw;
+    if (!Number.isFinite(s) || !Number.isFinite(e)) { histInfo.textContent = '请选择有效的起止时间'; return; }
+    if (s > e) { histInfo.textContent = '起始时间不能晚于结束时间'; return; }
+    const n = exportHistory(s, e);
+    histInfo.textContent = n ? `已导出 ${n} 条到 .m3u 文件` : '该时段无播放记录';
+    $('#led').textContent = n ? `已导出 ${n} 条播放记录` : '该时段无播放记录';
+  });
+
   const prevStyle = state.cardStyle, prevAccent = state.accent;
   $('#s-theme').addEventListener('change', e => {
     state.cardStyle = e.target.value;
@@ -1333,6 +1981,8 @@ $('#btn-settings').addEventListener('click', () => {
     state.voiceInterval = +$('#s-voice').value;
     state.streams = draft;
     saveStreams();
+    state.webLinks = webDraft;
+    saveWebLinks();
     refreshChannels();
     refreshStreamKeys();
     // 正在播放的串流被删除：直接停止并回到 CH1

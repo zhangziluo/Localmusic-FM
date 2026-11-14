@@ -370,6 +370,35 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
   min-width: 28px;
   text-align: center;
 }
+.rec-btn {
+  margin-top: 2px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color .2s, opacity .2s;
+}
+.rec-btn .rec-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #e5484d;
+  transition: transform .2s, opacity .2s;
+}
+.rec-btn:disabled { opacity: .35; cursor: not-allowed; }
+.rec-btn:not(:disabled):hover { border-color: #e5484d; }
+.rec-btn.recording { border-color: #e5484d; }
+.rec-btn.recording .rec-dot { animation: recPulse 1s ease-in-out infinite; }
+@keyframes recPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: .4; }
+}
 .fader-track {
   position: relative;
   width: 24px;
@@ -476,6 +505,29 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
 }
 @keyframes key-dial { 50% { opacity: 0.4; } }
 .key.streaming.active small { color: var(--bg); opacity: 0.75; }
+
+/* 网页跳转态：* 键呼吸提示 */
+.key.webjump {
+  border-color: var(--accent);
+  color: var(--accent);
+  animation: key-dial 1s steps(2, start) infinite;
+}
+/* 数码屏「↗」脉冲提示 + 确认后闪一下就跳转 */
+@keyframes dash-link-pulse { 50% { opacity: 0.35; } }
+#dashboard.dash-link .dash-channel b {
+  display: inline-block;
+  animation: dash-link-pulse 0.8s steps(2, start) infinite;
+  color: var(--accent);
+}
+@keyframes dash-link-flash {
+  0% { opacity: 0; transform: scale(0.6); }
+  45% { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+#dashboard.dash-link-flash .dash-channel b {
+  display: inline-block;
+  animation: dash-link-flash 0.7s ease-out;
+}
 
 /* ============ 主题色圆点 ============ */
 .theme-dot {
@@ -694,6 +746,30 @@ html.skin-tube #led { text-shadow: 0 0 7px rgba(255,176,0,0.55); }
 }
 .stream-form-actions { display: flex; gap: 8px; }
 .stream-err { font-size: 12px; color: #e5484d; min-height: 14px; }
+
+/* ============ 导出播放记录 ============ */
+.sheet .row.export-head { margin-bottom: 4px; }
+.export-box { display: flex; flex-direction: column; gap: 8px; margin: -2px 0 6px; }
+.export-presets { display: flex; gap: 8px; }
+.export-presets .mini-btn { flex: 1 1 auto; }
+.export-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.export-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--panel-line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--panel-ink);
+  outline: none;
+}
+.hist-info { font-size: 12px; color: var(--panel-ink); opacity: .72; min-height: 14px; }
 
 /* ============ 响应式 ============ */
 @media (max-width: 380px) {

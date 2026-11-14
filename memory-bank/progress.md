@@ -16,24 +16,67 @@
 | 彩蛋（未提交） | 数字键连击 `19930214` / `930214` → 新窗口打开 `create.myfami.cn` | ✅ |
 | v6 串流编号（未提交） | 串流可绑定 `10`–`9999` 编号，`#` 选号播流（串流优先），最多 1000 条 | ✅ |
 | v7 整点报时（未提交） | 播放中整点：12 小时制哔声（Web Audio）+ 系统 TTS 报时，时区推断地点，暂停后自动恢复 | ✅ |
+| v8 导出 + 录制（未提交） | 本地曲目播放记录（`fm_history`，2000 条）按时间范围导出 `.m3u`；音乐推子下方 ⏺️ 录制本地 / 串流，跨域无 CORS 时禁用 | ✅ |
+| v9 网页跳转（未提交） | `*` → 数字（`0`–`999999`）→ `*` 在新窗口打开绑定网址；`fm_webjumps` 最多 1000 条，默认 `1/2/3`；`*` 移出网络串流键位 | ✅ |
 
 ## 当前实现清单
 
 - 曲库：递归扫描、覆盖/追加导入、索引持久化、文件夹句柄自动恢复（Chromium）
 - 播放：随机、收藏频道 CH2、CH3-9（>15 首解锁）、上一首/下一首随机
-- 网络串流：实体键 `STREAM_KEYS = 3-9 * 0` 一键一流；另可绑定编号 `10`–`9999`，通过 `#` 选号播放；直播流进度条 100%，删除后停止
+- 网络串流：实体键 `STREAM_KEYS = 3-9 0` 一键一流；另可绑定编号 `10`–`9999`，通过 `#` 选号播放；直播流进度条 100%，删除后停止
 - 串流编号：`parseStreamKey()` 校验 / 归一化，`loadStreams()` 最多读取 1000 条；设置面板文本框输入 + 用量显示（`N / 1000`），重复 / 非法编号拒绝
 - 按序号点歌：`#` 进入 → 多位数字 → `#` 确认；先匹配串流编号，未命中再按曲目序号；`1`/`2` 与越界拒绝，`*`/传输键/5 秒超时取消；授权失效时先恢复再跳转
+- 网页跳转：`*` 进入 → 多位数字（`0`–`999999`）→ `*` 确认；`fm_webjumps` 保存编号 → 网址（默认 `1/2/3`，最多 1000 条）；数码屏 `↗编号` 闪烁，`*` 键呼吸提示
 - 整点报时：播放中整点触发，`updateClock()` 每秒检查；12 小时制哔声 + 系统 TTS「现在是〔地点〕时间〔时段〕〔中文小时〕点整」；地点按设备时区推断；报时暂停播放、结束恢复；同小时去重
+- 播放记录：`recordPlay()` 在每次 `playTrack()` 时写入 `fm_history`（`{ name, fileName, path, ts }`，最多 2000 条）
+- 导出：设置面板「导出播放记录」支持今天 / 昨天 / 近 7 天 / 自定义起止，生成 `fm-YYYYMMDD-HHMMSS.m3u`（仅本地曲目）
+- 录制：`#btn-record`（音乐推子下方），独立 Audio 元素 + `MediaElementSource` + `MediaStreamDestination` + `MediaRecorder`；同源或 CORS 允许的串流才可录；输出 webm / ogg / mp4
 - 音量：音乐 / 底噪双竖推子，实时平滑
 - 主题：dark / led / crt / cream / tube + 主题色圆点 + meta theme-color
 - 底噪：粉红噪声 + 海浪混合，仅播放时出现
 - 数据卡片：实时时钟、CH（串流时显示键位）、累计时长（9999:59:59 归零 + 0.2s 重启动画）
-- PWA：SW 离线缓存 fm-pwa-v18、manifest、安装
-- 设置面板：主题色 / 界面主题 / 底噪 / 口播间隔 / 网络串流 / 完成
-- 快捷键：Space、←、→、0-9、`*`、`#`（`#` 进入/确认选号，`*` 取消）
+- PWA：SW 离线缓存 fm-pwa-v20、manifest、安装
+- 设置面板：主题色 / 界面主题 / 底噪 / 口播间隔 / 网络串流 / 网页跳转 / 导出播放记录 / 完成
+- 快捷键：Space、←、→、0-9、`*`、`#`（`#` 进入/确认选号，`*` 进入/确认网页跳转，选号态下 `*` 取消）
 
-## 最近一次变更（整点报时 + 按序号点歌 + 串流编号）
+## 最近一次变更（网页跳转）
+
+- 常量：`WEB_LINKS_KEY = 'fm_webjumps'`、`MAX_WEB_NUM = 999999`、`MAX_WEB_LINKS = 1000`、`MAX_WEB_DIGITS = 6`、`WEB_TIMEOUT = 5000`、`DEFAULT_WEB_LINKS = { 1,2,3 }`
+- 状态机：模块级 `web = { active, buf, timer }`；`startWebJump()` / `webDigit()` / `confirmWebJump()` / `cancelWebJump()` / `handleStarKey()`
+- 校验：`parseWebKey()` 接受 `0`–`999999`（前导 0 归一化）；`loadWebLinks()` 首次用默认，之后过滤非法编号 / 非 `http(s)` / 非字符串
+- 交互：`*` → 数字 → `*`；数码屏 `#dash-ch` 显示 `↗` / `↗编号`，`#dashboard` 加 `.dash-link` 脉冲、确认后 `.dash-link-flash` 闪动；`*` 键加 `.webjump` 呼吸
+- 互斥：`startWebJump()` ↔ `startDial()` 互相取消；播放 / 切歌键、彩蛋触发、5 秒超时都退出跳转态
+- 设置：新增「网页跳转」区块（`#s-web-list` / `#s-web-form` / `webDraft`），点「完成」提交并 `saveWebLinks()`
+- 迁移：`STREAM_KEYS` 移除 `*`，`parseStreamKey('*')` 返回 `null`，旧 `*` 串流绑定在 `loadStreams()` / 重启后被丢弃
+- 样式：`.key.webjump`、`.dash-link` 脉冲、`.dash-link-flash`
+
+版本：
+- `style.css?v=11`、`app.js?v=12`、SW `fm-pwa-v20`
+- `app.js` 启动日志：`极简FM · app.js?v=12 已加载`
+
+## 最近一次变更（导出播放记录 + 录制）
+
+播放记录 / 导出：
+- 常量：`HISTORY_KEY = 'fm_history'`、`MAX_HISTORY = 2000`
+- 写入：`recordPlay(t)` 在 `playTrack()` 内调用，追加 `{ name, fileName, path, ts }`，超出上限丢弃最旧
+- 范围：`presetRange('today'|'yesterday'|'week', now?)` 以本地零点为界；`toLocalInputValue()` / `parseLocalInputValue()` 负责 `datetime-local` 互转
+- 生成：`buildM3u(list)` = `#EXTM3U` + 每行 `path || fileName || name`；导出按 `ts` 升序
+- UI：设置面板「导出播放记录」预设按钮 + 起止输入 + 导出按钮；结束时间按分钟末（`+59999ms`）处理
+- 下载：`Blob` + `<a download>`，文件名 `fm-YYYYMMDD-HHMMSS.m3u`；空区间不下载
+
+录制：
+- 判定：`canRecordUrl(url)` 同源直接 true，跨域 `fetch(url, { mode:'cors' })` 成功才 true，结果按 URL 缓存
+- 按钮：`refreshRecordButton()` 依 `state.playing` / `mode` / CORS 结果设置 `disabled` 与 `title`；异步 token 防过期
+- 启动：`startRecording()` 用独立 `new Audio()`（跨域设 `crossOrigin='anonymous'`）→ `createMediaElementSource` → `createMediaStreamDestination` → `MediaRecorder`
+- 停止：`stopRecording()` → `recorder.onstop` → `finalizeRecording()` 合并 Blob 并下载；`cleanupRecording()` 断开节点、回收 URL
+- 收尾：`playTrack()` / `playStream()` 切歌切流时若在录制先 `stopRecording(true)`
+- 格式：`audio/webm;codecs=opus` → `audio/webm` → `audio/ogg;codecs=opus` → `audio/mp4`
+
+版本：
+- `style.css?v=10`、`app.js?v=11`、SW `fm-pwa-v19`
+- `app.js` 启动日志：`极简FM · app.js?v=11 已加载`
+
+## 上一轮变更（整点报时 + 按序号点歌 + 串流编号）
 
 整点报时：
 - 常量/状态：`CHIME_BEEP_HZ = 880`、`CHIME_BEEP_LEN = 0.14`、`CHIME_BEEP_GAP = 0.26`；模块级 `chiming` / `lastChimedKey` / `chimeResume`（必须在 `updateClock` 首次调用前初始化，避免 TDZ）
@@ -70,7 +113,7 @@
 - `STREAM_KEYS` 去掉 `#` → `['3','4','5','6','7','8','9','*','0']`；`loadStreams()` 自动忽略历史 `#` 绑定
 - `refreshStreamKeys()` 对 `#` 固定显示「点歌」
 
-版本：
+版本（上一轮）：
 - `style.css?v=9`、`app.js?v=10`、SW `fm-pwa-v18`
 - `app.js` 启动日志：`极简FM · app.js?v=10 已加载`
 
@@ -80,8 +123,10 @@
 
 ```
 node --check app.js / sw.js                              → OK
-jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、test-streams.js、test-chime.js）→ 全部通过
+jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、test-streams.js、test-chime.js、test-history.js、test-record.js）→ 全部通过
 ```
+
+> `test-podcast.js` 属于已移除的播客功能，依赖 `parseRss`，已废弃。
 
 选号测试覆盖：
 ```
@@ -97,7 +142,7 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、tes
 
 串流编号测试覆盖（test-streams.js）：
 ```
-  · parseStreamKey：10 / 010 / 3 / * / 0 通过，1/2/10000/# 拒绝  ✔
+  · parseStreamKey：10 / 010 / 3 / 0 通过，1/2/10000/#/* 拒绝      ✔
   · loadStreams：旧 # / 1 / 5 位编号 / 非法键被过滤，上限 1000  ✔
   · 设置面板：默认分配、添加 123、重复/非法拒绝、留空自动分配  ✔
   · #10# / #99# 播流（99 超出曲目数）、#3# 串流优先于频道     ✔
@@ -114,6 +159,18 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、tes
   · 13 点集成：1 声、暂停音乐、TTS 文案、结束后恢复播放          ✔
   · 东京时区 14 点：2 声 + 「现在是东京时间下午两点整」          ✔
   · 同一整点只报一次（去重）                                     ✔
+```
+
+网页跳转测试覆盖（test-webjump.js）：
+```
+  · 默认 1/2/3 映射；parseWebKey：0/1/010/999999 通过，1000000/abc/-1 拒绝 ✔
+  · 旧 * 串流绑定被 loadStreams 丢弃；* 键小字=跳转               ✔
+  · * 进入跳转：数码屏 ↗、* 键呼吸、LED 提示                      ✔
+  · 编号 1 / 多位 10 / 单独 0 打开对应 URL；window.open 新窗口 + noopener ✔
+  · 未绑定提示且不打开；空输入只提示不退出                        ✔
+  · 与选号互斥（选号态 * 取消；startWebJump 退出选号）            ✔
+  · 设置面板列出默认、非法/超限/重复拒绝、添加 20、删除 3、持久化  ✔
+  · loadWebLinks 过滤：04→4 归一化、超限/非法键/非 http/非字符串丢弃 ✔
 ```
 
 历史记录（网络串流，v4）：
@@ -136,9 +193,13 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、tes
 6. **自动恢复文件夹**：仅 Chromium；Safari/Firefox 每次需重新选择
 7. **无 Media Session / 锁屏控制**
 8. **时长上限**：9999:59:59 后归零（设计如此，会触发重启动画）
-9. **仓库状态**：`b2becff` 已包含 v4 网络串流；本轮改动（移除播客 + 按序号点歌 + 彩蛋 + 串流编号 + 整点报时，涉及 app.js / style.css / index.html / sw.js / README / memory-bank）尚未提交
+9. **仓库状态**：`b2becff` 已包含 v4 网络串流；本轮改动（移除播客 + 按序号点歌 + 彩蛋 + 串流编号 + 整点报时 + 导出 + 录制 + 网页跳转，涉及 app.js / style.css / index.html / sw.js / README / memory-bank）尚未提交
 10. **整点报时依赖系统 TTS**：缺少中文语音时可能读英文或不出声；后台标签页定时器被节流时可能延迟 / 跳过
 11. **报时恢复受自动播放策略影响**：非用户手势下 `audio.play()` 可能被拒绝，报时结束后停在暂停状态
+12. **导出的 .m3u 可能只有文件名**：File System Access 导入拿不到相对路径；文件分散在子目录时播放器无法定位
+13. **跨域串流不能录制**：无 `Access-Control-Allow-Origin` 时只能录到静音，按钮会置灰；属浏览器安全限制
+14. **录音格式不是 mp3**：只有 webm / ogg / mp4（取决于浏览器），不做转码；iOS Safari 支持有限
+15. **录音仅从点击时刻开始**：直播流从建立录制连接时起录；页面被强制关闭时最后一段（最多 1 秒）可能丢失
 
 ## 关键决策记录
 
@@ -152,6 +213,11 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、tes
 | 移除播客 | 回到 v4 网络串流基线，`#` 重新作为串流键 | 用户要求删除播客功能 |
 | 点歌交互 | **保留频道**：`#` 进入选号态 → 数字 → `#` 确认（用户确认） | 3-9 短按仍要切频道，需要独立前缀 |
 | `#` 与串流 | 把 `#` 从 `STREAM_KEYS` 移除 | 避免与点歌前缀冲突；旧绑定自动失效 |
+| `*` 与串流 | 把 `*` 从 `STREAM_KEYS` 移除，改作网页跳转前缀 | 与 `#` 点歌对称；旧 `*` 绑定在 load 时丢弃 |
+| 网页跳转交互 | **`*` → 数字 → `*` 确认**（用户确认） | 与点歌一致的前缀 + 确认心智；避免误触弹窗 |
+| 网页编号范围 | `0`–`999999`（6 位，用户确认） | 足够容纳大量站点；`0` 也合法 |
+| 网页默认值 | `1`→streamurl.link、`2`→roamdial.com、`3`→globalradio.app | 用户提供的常用电台站点 |
+| 网页容量 | `MAX_WEB_LINKS = 1000` | 与串流上限一致，避免 localStorage 膨胀 |
 | 序号口径 | 1 起算、按 `state.tracks` 顺序，有效 `3 ~ tracks.length` | 与用户「1 随机 / 2 红心」的心智一致 |
 | 多位输入 | 支持最多 4 位，首位不能是 0 | 大曲库需要；避免 `03` 这类歧义 |
 | 跳转后下一首 | 仍是随机，不建立顺序队列 | 保持 iPod shuffle 的核心体验 |
@@ -171,5 +237,6 @@ jsdom（/tmp/fmtest/test.js、test-restore.js、test-dial.js、test-egg.js、tes
 - [ ] 用真实 https 电台流做一次浏览器端手测（Icecast mp3/aac）
 - [ ] 提交本轮改动（移除播客 + 按序号点歌）与 `memory-bank/`；如需可补 `.gitignore`（`.venv/`、`.DS_Store`、`*.bak`）
 - [ ] 浏览器手测点歌（含授权失效后恢复再跳转，以及选号态下键盘输入）
+- [ ] 浏览器手测网页跳转：`*` → `1` → `*` 是否打开 streamurl.link；再试未绑定编号与 5 秒超时
 - [ ] 浏览器手测整点报时：可在 Console 执行 `maybeChime(new Date(2026,0,1,13,0,0))` 强制触发一次（需先播放）
 - [ ] 可选：Media Session API（锁屏信息 / 媒体键）

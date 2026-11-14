@@ -7,7 +7,7 @@
 <title>极简FM</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png" type="image/png">
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <div id="app">
@@ -23,6 +23,9 @@
         <input id="music-volume" type="range" min="0" max="100" step="1" value="100" aria-label="音乐音量">
       </div>
       <b class="fader-val" id="music-volume-val">100</b>
+      <button class="rec-btn" id="btn-record" type="button" title="播放中才能录制" aria-label="录制当前声音" disabled>
+        <span class="rec-dot"></span>
+      </button>
     </div>
 
     <!-- 数据卡片（底色/字色/辉光跟随界面主题） -->
@@ -113,7 +116,7 @@
     <button class="key locked" data-ch="7">7<small>待解锁</small></button>
     <button class="key locked" data-ch="8">8<small>待解锁</small></button>
     <button class="key locked" data-ch="9">9<small>待解锁</small></button>
-    <button class="key" data-key="*" aria-label="星号键，暂未开放">*</button>
+    <button class="key" data-key="*" aria-label="星号键：网页跳转，再按一次确认">*</button>
     <button class="key" data-key="0" aria-label="0 键，暂未开放">0</button>
     <button class="key" data-key="#" aria-label="井号键，按序号点歌，再按一次确认">#</button>
   </div>
@@ -125,6 +128,6 @@
   <div id="toast" style="display:none;"></div>
 </div>
 
-<script src="app.js?v=10"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
